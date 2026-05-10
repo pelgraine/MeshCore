@@ -640,12 +640,14 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
   setCurrScreen(msg_preview);
 
   if (_display != NULL) {
-    if (!_display->isOn() && !hasConnection()) {
-      _display->turnOn();
-    }
+    // Do not auto-wake the screen on incoming messages. The screen stays
+    // in whatever state the user left it (off at night, on if they're
+    // looking at it). If the screen is already on, extend the auto-off
+    // timer and trigger a refresh so the new message renders. Pressing
+    // button A always wakes the screen (see checkDisplayOn).
     if (_display->isOn()) {
-    _auto_off = millis() + AUTO_OFF_MILLIS;  // extend the auto-off timer
-    _next_refresh = 100;  // trigger refresh
+      _auto_off = millis() + AUTO_OFF_MILLIS;  // extend the auto-off timer
+      _next_refresh = 100;  // trigger refresh
     }
   }
 }
