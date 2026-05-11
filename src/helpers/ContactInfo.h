@@ -5,16 +5,6 @@
 
 #define OUT_PATH_UNKNOWN   0xFF
 
-// Per-contact path storage cap. Real-world meshes very rarely exceed
-// ~10 hops, so 20 hops (40 bytes at 2 bytes/hash) is a generous cap that
-// saves 24 bytes per contact versus the full MAX_PATH_SIZE of 64. Wire
-// protocol with the BLE app and the on-disk /contacts3 format both stay
-// at MAX_PATH_SIZE for compatibility, with truncation on read and
-// zero-padding on write.
-#ifndef MAX_CONTACT_PATH_SIZE
-#define MAX_CONTACT_PATH_SIZE 40
-#endif
-
 struct ContactInfo {
   mesh::Identity id;
   char name[32];
@@ -22,7 +12,7 @@ struct ContactInfo {
   uint8_t flags;
   uint8_t out_path_len;
   mutable bool shared_secret_valid; // flag to indicate if shared_secret has been calculated
-  uint8_t out_path[MAX_CONTACT_PATH_SIZE];
+  uint8_t out_path[MAX_PATH_SIZE];
   uint32_t last_advert_timestamp;   // by THEIR clock
   uint32_t lastmod;  // by OUR clock
   int32_t gps_lat, gps_lon;    // 6 dec places

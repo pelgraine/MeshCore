@@ -509,12 +509,14 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
   _msgcount = msgcount;
 
   if (_display != NULL) {
-    if (!_display->isOn() && !hasConnection()) {
-      _display->turnOn();
-    }
+    // Do not auto-wake the screen on incoming messages. The screen stays
+    // in whatever state the user left it (off at night, on if they're
+    // looking at it). If the screen is already on, extend the auto-off
+    // timer and trigger a refresh so the new message count updates.
+    // Pressing button A always wakes the screen via checkDisplayOn.
     if (_display->isOn()) {
-    _auto_off = millis() + AUTO_OFF_MILLIS;  // extend the auto-off timer
-    _next_refresh = 100;  // trigger refresh
+      _auto_off = millis() + AUTO_OFF_MILLIS;  // extend the auto-off timer
+      _next_refresh = 100;  // trigger refresh
     }
   }
 }

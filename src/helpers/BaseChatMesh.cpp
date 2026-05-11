@@ -304,18 +304,7 @@ bool BaseChatMesh::onPeerPathRecv(mesh::Packet* packet, int sender_idx, const ui
 bool BaseChatMesh::onContactPathRecv(ContactInfo& from, uint8_t* in_path, uint8_t in_path_len, uint8_t* out_path, uint8_t out_path_len, uint8_t extra_type, uint8_t* extra, uint8_t extra_len) {
   // NOTE: default impl, we just replace the current 'out_path' regardless, whenever sender sends us a new out_path.
   // FUTURE: could store multiple out_paths per contact, and try to find which is the 'best'(?)
-  // out_path_len is encoded: top 2 bits = (hash_size - 1), bottom 6 bits = hop_count.
-  // If the decoded real byte length exceeds our shrunk per-contact buffer,
-  // fall back to flood routing for this contact rather than corrupting
-  // the path or overflowing the buffer.
-  uint8_t hash_size = (out_path_len >> 6) + 1;
-  uint8_t hop_count = out_path_len & 0x3F;
-  uint16_t byte_len = (uint16_t)hash_size * hop_count;
-  if (byte_len > MAX_CONTACT_PATH_SIZE) {
-    from.out_path_len = OUT_PATH_UNKNOWN;
-  } else {
-    from.out_path_len = mesh::Packet::copyPath(from.out_path, out_path, out_path_len);  // store a copy of path, for sendDirect()
-  }
+  from.out_path_len = mesh::Packet::copyPath(from.out_path, out_path, out_path_len);  // store a copy of path, for sendDirect()
   from.lastmod = getRTCClock()->getCurrentTime();
 
   onContactPathUpdated(from);

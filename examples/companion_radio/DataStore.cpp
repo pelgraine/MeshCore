@@ -286,9 +286,6 @@ File file = openRead(_getContactsChannelsFS(), "/contacts3");
         ContactInfo c;
         uint8_t pub_key[32];
         uint8_t unused;
-        // Bridge between shrunk in-RAM struct (MAX_CONTACT_PATH_SIZE) and
-        // the on-disk format which always stores 64 bytes for path.
-        uint8_t disk_path[64];
 
         bool success = (file.read(pub_key, 32) == 32);
         success = success && (file.read((uint8_t *)&c.name, 32) == 32);
@@ -298,26 +295,12 @@ File file = openRead(_getContactsChannelsFS(), "/contacts3");
         success = success && (file.read((uint8_t *)&c.sync_since, 4) == 4); // was 'reserved'
         success = success && (file.read((uint8_t *)&c.out_path_len, 1) == 1);
         success = success && (file.read((uint8_t *)&c.last_advert_timestamp, 4) == 4);
-        success = success && (file.read(disk_path, 64) == 64);
+        success = success && (file.read(c.out_path, 64) == 64);
         success = success && (file.read((uint8_t *)&c.lastmod, 4) == 4);
         success = success && (file.read((uint8_t *)&c.gps_lat, 4) == 4);
         success = success && (file.read((uint8_t *)&c.gps_lon, 4) == 4);
 
         if (!success) break; // EOF
-
-        // Copy the first MAX_CONTACT_PATH_SIZE bytes. out_path_len is
-        // encoded (top 2 bits = hash_size-1, bottom 6 bits = hop_count).
-        // If the encoded real byte length exceeds our shrunk buffer, fall
-        // back to flood routing rather than truncating.
-        memcpy(c.out_path, disk_path, MAX_CONTACT_PATH_SIZE);
-        if (c.out_path_len != OUT_PATH_UNKNOWN) {
-          uint8_t hash_size = (c.out_path_len >> 6) + 1;
-          uint8_t hop_count = c.out_path_len & 0x3F;
-          uint16_t byte_len = (uint16_t)hash_size * hop_count;
-          if (byte_len > MAX_CONTACT_PATH_SIZE) {
-            c.out_path_len = OUT_PATH_UNKNOWN;
-          }
-        }
 
         c.id = mesh::Identity(pub_key);
         if (!host->onContactLoaded(c)) full = true;
@@ -332,15 +315,8 @@ void DataStore::saveContacts(DataStoreHost* host) {
     uint32_t idx = 0;
     ContactInfo c;
     uint8_t unused = 0;
-    // Bridge buffer for on-disk path field; always 64 bytes wide so the
-    // file format stays compatible with stock MeshCore and previous Meck
-    // builds. Zero-pad beyond MAX_CONTACT_PATH_SIZE.
-    uint8_t disk_path[64];
 
     while (host->getContactForSave(idx, c)) {
-      memset(disk_path, 0, sizeof(disk_path));
-      memcpy(disk_path, c.out_path, MAX_CONTACT_PATH_SIZE);
-
       bool success = (file.write(c.id.pub_key, 32) == 32);
       success = success && (file.write((uint8_t *)&c.name, 32) == 32);
       success = success && (file.write(&c.type, 1) == 1);
@@ -349,7 +325,7 @@ void DataStore::saveContacts(DataStoreHost* host) {
       success = success && (file.write((uint8_t *)&c.sync_since, 4) == 4);
       success = success && (file.write((uint8_t *)&c.out_path_len, 1) == 1);
       success = success && (file.write((uint8_t *)&c.last_advert_timestamp, 4) == 4);
-      success = success && (file.write(disk_path, 64) == 64);
+      success = success && (file.write(c.out_path, 64) == 64);
       success = success && (file.write((uint8_t *)&c.lastmod, 4) == 4);
       success = success && (file.write((uint8_t *)&c.gps_lat, 4) == 4);
       success = success && (file.write((uint8_t *)&c.gps_lon, 4) == 4);
