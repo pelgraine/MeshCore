@@ -305,11 +305,18 @@ File file = openRead(_getContactsChannelsFS(), "/contacts3");
 
         if (!success) break; // EOF
 
-        // Copy the first MAX_CONTACT_PATH_SIZE bytes; truncate out_path_len
-        // if a longer path was stored on disk by an older firmware version.
+        // Copy the first MAX_CONTACT_PATH_SIZE bytes. out_path_len is
+        // encoded (top 2 bits = hash_size-1, bottom 6 bits = hop_count).
+        // If the encoded real byte length exceeds our shrunk buffer, fall
+        // back to flood routing rather than truncating.
         memcpy(c.out_path, disk_path, MAX_CONTACT_PATH_SIZE);
-        if (c.out_path_len != OUT_PATH_UNKNOWN && c.out_path_len > MAX_CONTACT_PATH_SIZE) {
-          c.out_path_len = MAX_CONTACT_PATH_SIZE;
+        if (c.out_path_len != OUT_PATH_UNKNOWN) {
+          uint8_t hash_size = (c.out_path_len >> 6) + 1;
+          uint8_t hop_count = c.out_path_len & 0x3F;
+          uint16_t byte_len = (uint16_t)hash_size * hop_count;
+          if (byte_len > MAX_CONTACT_PATH_SIZE) {
+            c.out_path_len = OUT_PATH_UNKNOWN;
+          }
         }
 
         c.id = mesh::Identity(pub_key);
