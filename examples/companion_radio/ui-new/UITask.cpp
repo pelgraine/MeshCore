@@ -31,6 +31,11 @@
 
 #include "icons.h"
 
+#ifdef TECHO_KEYPAD
+#include "KeypadComposeScreen.h"
+#include "../MyMesh.h"
+#endif
+
 class SplashScreen : public UIScreen {
   UITask* _task;
   unsigned long dismiss_after;
@@ -588,6 +593,9 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   splash = new SplashScreen(this);
   home = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
   msg_preview = new MsgPreviewScreen(this, &rtc_clock);
+#ifdef TECHO_KEYPAD
+  kp_compose = new KeypadComposeScreen(&rtc_clock);
+#endif
   setCurrScreen(splash);
 }
 
@@ -637,6 +645,12 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
   _msgcount = msgcount;
 
   ((MsgPreviewScreen *) msg_preview)->addPreview(path_len, from_name, text);
+#ifdef TECHO_KEYPAD
+  // Feed incoming channel messages to the compose inbox (notifyPublicMsg filters
+  // to the composing channel). Don't yank the user out of compose mid-typing.
+  if (kp_compose) ((KeypadComposeScreen*)kp_compose)->notifyPublicMsg(from_name, text);
+  if (curr != kp_compose)
+#endif
   setCurrScreen(msg_preview);
 
   if (_display != NULL) {
@@ -775,6 +789,30 @@ void UITask::loop() {
   }
 #endif
 
+#ifdef TECHO_KEYPAD
+  {
+    extern char techo_keypad_read();   // provided by variants/lilygo_techo_lite
+    char k = techo_keypad_read();
+    if (k == KEY_HOME) {               // Home toggles the keyshield backlight
+      extern void techo_keyshield_backlight_toggle();
+      techo_keyshield_backlight_toggle();
+      k = 0;
+    }
+    if (k) c = checkDisplayOn(k);
+  }
+  // Mail key opens the compose channel picker from the home screen
+  if (c == KEY_CONTEXT_MENU && curr == home && kp_compose) {
+    KeypadComposeScreen* kp = (KeypadComposeScreen*)kp_compose;
+    kp->beginChannelSelect();
+    ChannelDetails ch;
+    for (uint8_t i = 0; i < MAX_GROUP_CHANNELS; i++) {
+      if (the_mesh.getChannel(i, ch) && ch.name[0] != 0) kp->addChannel(i, ch.name);
+    }
+    setCurrScreen(kp_compose);
+    c = 0;   // consumed
+  }
+#endif
+
   if (c != 0 && curr) {
     curr->handleInput(c);
     _auto_off = millis() + AUTO_OFF_MILLIS;   // extend auto-off timer
@@ -788,6 +826,28 @@ void UITask::loop() {
 #endif
 
   if (curr) curr->poll();
+
+#ifdef TECHO_KEYPAD
+  if (curr == kp_compose) {
+    KeypadComposeScreen* kp = (KeypadComposeScreen*)kp_compose;
+    if (kp->wantsExit()) {
+      kp->acknowledgeExit();
+      gotoHomeScreen();
+    }
+    const char* sendText = nullptr;
+    if (kp->consumeSendRequest(&sendText) && sendText) {
+      uint8_t ch_idx = kp->getChannelIdx();
+      ChannelDetails ch;
+      if (the_mesh.getChannel(ch_idx, ch)) {
+        uint32_t ts = rtc_clock.getCurrentTime();
+        the_mesh.sendGroupMessage(ts, ch.channel,
+            the_mesh.getNodeName(), sendText, strlen(sendText));
+        showAlert("Sent!", 800);
+      }
+      kp->clearOutBuf();
+    }
+  }
+#endif
 
   if (_display != NULL && _display->isOn()) {
     if (millis() >= _next_refresh && curr) {

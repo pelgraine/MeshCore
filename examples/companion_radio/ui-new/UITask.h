@@ -51,6 +51,9 @@ class UITask : public AbstractUITask {
   UIScreen* splash;
   UIScreen* home;
   UIScreen* msg_preview;
+#ifdef TECHO_KEYPAD
+  UIScreen* kp_compose;
+#endif
   UIScreen* curr;
 
   void userLedHandler();
