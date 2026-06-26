@@ -61,9 +61,9 @@ class BaseChatMesh : public mesh::Mesh {
 
   friend class ContactsIterator;
 
-  ContactInfo contacts[MAX_CONTACTS+MAX_ANON_CONTACTS];
+  ContactInfo* contacts;
   int num_contacts;
-  int sort_array[MAX_CONTACTS+MAX_ANON_CONTACTS];
+  int* sort_array;
   int matching_peer_indexes[MAX_SEARCH_RESULTS];
   unsigned long txt_send_timeout;
 #ifdef MAX_GROUP_CHANNELS
@@ -81,7 +81,9 @@ protected:
   BaseChatMesh(mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc, mesh::PacketManager& mgr, mesh::MeshTables& tables)
       : mesh::Mesh(radio, ms, rng, rtc, mgr, tables)
   {
-    resetContacts();
+    contacts = NULL;
+    sort_array = NULL;
+    num_contacts = 0;
 
   #ifdef MAX_GROUP_CHANNELS
     memset(channels, 0, sizeof(channels));
@@ -97,6 +99,19 @@ protected:
   void resetContacts() {
     memset(contacts, 0, sizeof(contacts[0])*MAX_ANON_CONTACTS);   // set all to have type = ADV_TYPE_NONE(0)
     num_contacts = MAX_ANON_CONTACTS;  // seed the first contacts for anon requests
+  }
+  // Allocate the contact arrays. Deferred from the constructor because PSRAM
+  // isn't available during global init; call from begin() before loading contacts.
+  void initContacts() {
+    if (contacts != NULL) return;
+#if defined(BOARD_HAS_PSRAM) && defined(ESP32)
+    contacts   = (ContactInfo*) ps_calloc(MAX_CONTACTS+MAX_ANON_CONTACTS, sizeof(ContactInfo));
+    sort_array = (int*) ps_calloc(MAX_CONTACTS+MAX_ANON_CONTACTS, sizeof(int));
+#else
+    contacts   = new ContactInfo[MAX_CONTACTS+MAX_ANON_CONTACTS]();
+    sort_array = new int[MAX_CONTACTS+MAX_ANON_CONTACTS]();
+#endif
+    num_contacts = MAX_ANON_CONTACTS;  // seed the reserved anon slots (already zeroed)
   }
   void populateContactFromAdvert(ContactInfo& ci, const mesh::Identity& id, const AdvertDataParser& parser, uint32_t timestamp);
   ContactInfo* allocateContactSlot(bool transient_only=false); // helper to find slot for new contact

@@ -51,6 +51,9 @@ class UITask : public AbstractUITask {
   UIScreen* splash;
   UIScreen* home;
   UIScreen* msg_preview;
+#if defined(UI_HAS_CLOCK_SCREEN)
+  UIScreen* clock_screen;
+#endif
   UIScreen* curr;
 
   void userLedHandler();

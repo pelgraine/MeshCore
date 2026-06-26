@@ -11,6 +11,19 @@
 #endif
 #define BOOT_SCREEN_MILLIS   3000   // 3 seconds
 
+#if defined(UI_HAS_CLOCK_SCREEN)
+#include <time.h>
+// Compute local HH:MM from a unix timestamp using the build-time UTC offset.
+// Returns false (outputs untouched) if the clock isn't set yet.
+static bool clockLocalTime(uint32_t now, int& hrs, int& mins) {
+  if (now <= 1700000000) return false;
+  int32_t local = (int32_t)now + ((int32_t)CLOCK_UTC_OFFSET * 3600);
+  hrs = (local / 3600) % 24; if (hrs < 0) hrs += 24;
+  mins = (local / 60) % 60;  if (mins < 0) mins += 60;
+  return true;
+}
+#endif
+
 #ifdef PIN_STATUS_LED
 #define LED_ON_MILLIS     20
 #define LED_ON_MSG_MILLIS 200
@@ -199,6 +212,25 @@ public:
 
     // battery voltage
     renderBatteryIndicator(display, _task->getBattMilliVolts());
+
+#if defined(UI_HAS_CLOCK_SCREEN)
+    // centered header clock (white) — only when time is valid, pushed right of node name
+    {
+      int hrs, mins;
+      if (clockLocalTime(_rtc->getCurrentTime(), hrs, mins)) {
+        char timeBuf[6];
+        sprintf(timeBuf, "%02d:%02d", hrs, mins);
+        display.setTextSize(1);
+        display.setColor(DisplayDriver::LIGHT);
+        uint16_t tw = display.getTextWidth(timeBuf);
+        int clockX = (display.width() - tw) / 2;
+        int nameRight = display.getTextWidth(filtered_name) + 4;
+        if (clockX < nameRight) clockX = nameRight;
+        display.setCursor(clockX, 0);
+        display.print(timeBuf);
+      }
+    }
+#endif
 
     // curr page indicator
     int y = 14;
@@ -554,6 +586,61 @@ public:
   }
 };
 
+#if defined(UI_HAS_CLOCK_SCREEN)
+class ClockScreen : public UIScreen {
+  UITask* _task;
+  mesh::RTCClock* _rtc;
+public:
+  ClockScreen(UITask* task, mesh::RTCClock* rtc) : _task(task), _rtc(rtc) {  }
+
+  int render(DisplayDriver& display) override {
+    uint32_t now = _rtc->getCurrentTime();
+    char buf[24];
+    int hrs, mins;
+
+    display.setColor(DisplayDriver::LIGHT);
+
+    // big clock
+    if (clockLocalTime(now, hrs, mins)) {
+      sprintf(buf, "%02d:%02d", hrs, mins);
+    } else {
+      strcpy(buf, "--:--");
+    }
+    display.setTextSize(5);
+    display.drawTextCentered(display.width() / 2, display.height() / 2 - 30, buf);
+
+    // date line below the clock
+    if (now > 1700000000) {
+      time_t local = (time_t)now + (time_t)CLOCK_UTC_OFFSET * 3600;
+      struct tm tmv;
+      gmtime_r(&local, &tmv);
+      static const char* const days[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
+      static const char* const mons[] = {"Jan","Feb","Mar","Apr","May","Jun",
+                                         "Jul","Aug","Sep","Oct","Nov","Dec"};
+      sprintf(buf, "%s %d %s", days[tmv.tm_wday], tmv.tm_mday, mons[tmv.tm_mon]);
+      display.setTextSize(2);
+      display.drawTextCentered(display.width() / 2, display.height() / 2 + 12, buf);
+    }
+
+    // battery % and unread count
+    int mv = _task->getBattMilliVolts();
+    int pct = ((mv - BATT_MIN_MILLIVOLTS) * 100) / (BATT_MAX_MILLIVOLTS - BATT_MIN_MILLIVOLTS);
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    sprintf(buf, "%d%% | %d unread", pct, _task->getMsgCount());
+    display.setTextSize(1);
+    display.drawTextCentered(display.width() / 2, display.height() / 2 + 38, buf);
+
+    return 1000;  // refresh about once a second
+  }
+
+  bool handleInput(char c) override {
+    // dismissal (any input -> home) is handled centrally in UITask::loop()
+    return false;
+  }
+};
+#endif
+
 void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs) {
   _display = display;
   _sensors = sensors;
@@ -588,6 +675,9 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   splash = new SplashScreen(this);
   home = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
   msg_preview = new MsgPreviewScreen(this, &rtc_clock);
+#if defined(UI_HAS_CLOCK_SCREEN)
+  clock_screen = new ClockScreen(this, &rtc_clock);
+#endif
   setCurrScreen(splash);
 }
 
@@ -807,6 +897,15 @@ void UITask::loop() {
   }
 #endif
 
+#if defined(UI_HAS_CLOCK_SCREEN)
+  if (c != 0 && curr == clock_screen) {
+    // any input on the clock screen returns to home
+    setCurrScreen(home);
+    _auto_off = millis() + AUTO_OFF_MILLIS;
+    _next_refresh = 100;
+    c = 0;
+  }
+#endif
   if (c != 0 && curr) {
     curr->handleInput(c);
     _auto_off = millis() + AUTO_OFF_MILLIS;   // extend auto-off timer
@@ -851,7 +950,17 @@ void UITask::loop() {
     }
 #endif
     if (millis() > _auto_off) {
+#if defined(UI_HAS_CLOCK_SCREEN)
+      if (curr != clock_screen) {
+        // idle: show the clock screen for a window, then blank
+        setCurrScreen(clock_screen);
+        _auto_off = millis() + CLOCK_SHOW_MILLIS;
+      } else {
+        _display->turnOff();
+      }
+#else
       _display->turnOff();
+#endif
     }
 #endif
   }
