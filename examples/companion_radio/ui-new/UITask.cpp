@@ -606,7 +606,7 @@ public:
     } else {
       strcpy(buf, "--:--");
     }
-    display.setTextSize(5);
+    display.setTextSize(4);
     display.drawTextCentered(display.width() / 2, display.height() / 2 - 30, buf);
 
     // date line below the clock
