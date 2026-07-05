@@ -979,6 +979,7 @@ void UITask::loop() {
         the_mesh.sendGroupMessage(ts, ch.channel, the_mesh.getNodeName(),
                                   sendText, strlen(sendText));
         showAlert("Sent!", 800);
+        ((TWatchChannelScreen*)tw_channel)->addSentMsg(sendText);
       }
       kb->clearOutBuf();
       setCurrScreen(tw_channel);

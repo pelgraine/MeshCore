@@ -39,8 +39,9 @@
 // ---- Tunables ---------------------------------------------------------------
 #define TW_LONG_PRESS_MS   600    // hold to select a channel in the picker
 #define TW_OUT_BUF_LEN     134    // MeshCore per-channel msg cap (~133) + NUL
-#define TW_INBOX_SIZE      3      // messages kept/shown on the channel screen
+#define TW_INBOX_SIZE      5      // messages kept/shown on the channel screen
 #define TW_INBOX_TEXT_LEN  96
+#define TW_TICKER_MS_PER_PX 20    // channel-screen ticker scroll speed (ms per pixel)
 #define TW_CH_NAME_LEN     32
 #define TW_PICKER_MAX      20     // matches MAX_GROUP_CHANNELS
 
@@ -183,7 +184,7 @@ class TWatchChannelScreen : public UIScreen {
   uint8_t _channelIdx;
   char    _channelName[TW_CH_NAME_LEN];
 
-  struct InboxEntry { char text[TW_INBOX_TEXT_LEN]; bool valid; };
+  struct InboxEntry { char text[TW_INBOX_TEXT_LEN]; bool valid; bool isSent; };
   InboxEntry _inbox[TW_INBOX_SIZE];
   uint8_t    _inboxNewest;
   uint8_t    _inboxCount;
@@ -194,15 +195,72 @@ class TWatchChannelScreen : public UIScreen {
   bool _wantsCompose;
   bool _wantsExit;
 
-  static const int HEADER_H     = 14;
+  int           _selectedSlot;    // ring slot shown as ticker, -1 = none
+  unsigned long _tickerStartMs;
+
+  static const int HEADER_H      = 14;
   static const int COMPOSE_BAR_H = 18;
+  static const int MSG_LINE_H    = 11;
+  static const int MSG_TOP       = HEADER_H + 2;
+
+  void pushEntry(const char* text, bool sent) {
+    _inboxNewest = (_inboxCount == 0) ? 0 : (uint8_t)((_inboxNewest + 1) % TW_INBOX_SIZE);
+    InboxEntry& e = _inbox[_inboxNewest];
+    if (text) { strncpy(e.text, text, TW_INBOX_TEXT_LEN - 1); e.text[TW_INBOX_TEXT_LEN - 1] = 0; }
+    else      { e.text[0] = 0; }
+    e.valid = true;
+    e.isSent = sent;
+    if (_inboxCount < TW_INBOX_SIZE) _inboxCount++;
+    _selectedSlot = -1;   // a new message dismisses any open ticker
+  }
+
+  void drawMsgLine(DisplayDriver& display, int y, const char* text, bool sent) {
+    const int W = display.width();
+    const int maxW = W - 4;
+    display.setColor(DisplayDriver::LIGHT);
+    if (!sent) {
+      display.drawTextEllipsized(2, y, maxW, text);   // incoming: left-aligned
+      return;
+    }
+    if (display.getTextWidth(text) <= maxW) {          // sent: right-aligned
+      display.drawTextRightAlign(W - 2, y, text);
+      return;
+    }
+    char buf[TW_INBOX_TEXT_LEN + 4];
+    strncpy(buf, text, sizeof(buf) - 4);
+    buf[sizeof(buf) - 4] = 0;
+    int ellW = display.getTextWidth("...");
+    int len = (int)strlen(buf);
+    while (len > 0 && display.getTextWidth(buf) > maxW - ellW) { buf[--len] = 0; }
+    strcat(buf, "...");
+    display.drawTextRightAlign(W - 2, y, buf);
+  }
+
+  void drawTicker(DisplayDriver& display, int y, const char* text, bool sent) {
+    const int W = display.width();
+    int textW = display.getTextWidth(text);
+    display.setColor(DisplayDriver::LIGHT);
+    if (textW <= W - 4) {   // fits -> nothing to scroll, keep alignment
+      if (sent) display.drawTextRightAlign(W - 2, y, text);
+      else      { display.setCursor(2, y); display.print(text); }
+      return;
+    }
+    int period = textW + 24;   // full text width + trailing gap
+    unsigned long elapsed = millis() - _tickerStartMs;
+    int off = (int)((elapsed / TW_TICKER_MS_PER_PX) % (unsigned long)period);
+    display.setCursor(2 - off, y);
+    display.print(text);
+    display.setCursor(2 - off + period, y);
+    display.print(text);
+  }
 
 public:
   TWatchChannelScreen(DisplayDriver* display)
     : _display(display), _channelIdx(0),
       _inboxNewest(0), _inboxCount(0),
       _touchDown(false), _downX(0), _downY(0),
-      _wantsCompose(false), _wantsExit(false) {
+      _wantsCompose(false), _wantsExit(false),
+      _selectedSlot(-1), _tickerStartMs(0) {
     _channelName[0] = 0;
     memset(_inbox, 0, sizeof(_inbox));
   }
@@ -215,6 +273,7 @@ public:
     _inboxNewest = 0; _inboxCount = 0;
     memset(_inbox, 0, sizeof(_inbox));
     _touchDown = false; _wantsCompose = false; _wantsExit = false;
+    _selectedSlot = -1;
   }
 
   uint8_t getChannelIdx() const { return _channelIdx; }
@@ -224,12 +283,12 @@ public:
   // this channel by name.
   void notifyMsg(const char* from, const char* text) {
     if (!from || strcmp(from, _channelName) != 0) return;
-    _inboxNewest = (_inboxCount == 0) ? 0 : (uint8_t)((_inboxNewest + 1) % TW_INBOX_SIZE);
-    InboxEntry& e = _inbox[_inboxNewest];
-    if (text) { strncpy(e.text, text, TW_INBOX_TEXT_LEN - 1); e.text[TW_INBOX_TEXT_LEN - 1] = 0; }
-    else      { e.text[0] = 0; }
-    e.valid = true;
-    if (_inboxCount < TW_INBOX_SIZE) _inboxCount++;
+    pushEntry(text, false);
+  }
+
+  // Called by UITask after a message is sent on this channel.
+  void addSentMsg(const char* text) {
+    pushEntry(text, true);
   }
 
   bool wantsCompose() const { return _wantsCompose; }
@@ -248,8 +307,22 @@ public:
     } else if (!now && _touchDown) {
       _touchDown = false;
       int H = _display->height();
-      if (_downX < 20 && _downY < HEADER_H) { _wantsExit = true; return; }     // back arrow
-      if (_downY >= H - COMPOSE_BAR_H) { _wantsCompose = true; return; }        // compose bar
+      if (_downX < 20 && _downY < HEADER_H) { _selectedSlot = -1; _wantsExit = true; return; }   // back arrow
+      if (_downY >= H - COMPOSE_BAR_H) { _selectedSlot = -1; _wantsCompose = true; return; }      // compose bar
+      // message area -> tap to open/close ticker
+      if (_downY >= MSG_TOP && _downY < H - COMPOSE_BAR_H) {
+        int visualRow = (_downY - MSG_TOP) / MSG_LINE_H;
+        if (visualRow >= 0 && visualRow < _inboxCount) {
+          int i = (_inboxCount - 1) - visualRow;
+          int slot = (int)_inboxNewest - i;
+          while (slot < 0) slot += TW_INBOX_SIZE;
+          slot %= TW_INBOX_SIZE;
+          if (_inbox[slot].valid) {
+            if (_selectedSlot == slot) _selectedSlot = -1;
+            else { _selectedSlot = slot; _tickerStartMs = millis(); }
+          }
+        }
+      }
     }
   }
 
@@ -266,25 +339,23 @@ public:
     display.setColor(DisplayDriver::LIGHT);
     display.drawRect(0, HEADER_H - 2, W, 1);
 
-    const int lineH     = 11;
-    const int areaTop    = HEADER_H + 1;
     const int areaBottom = H - COMPOSE_BAR_H - 1;
 
     if (_inboxCount == 0) {
       display.setColor(DisplayDriver::LIGHT);
-      display.setCursor(2, areaTop + 1);
+      display.setCursor(2, MSG_TOP);
       display.print("(no messages)");
     } else {
-      int y = areaTop + 1;
+      int y = MSG_TOP;
       for (int i = _inboxCount - 1; i >= 0; i--) {   // oldest first (top) -> newest (bottom)
         int idx = (int)_inboxNewest - i;
         while (idx < 0) idx += TW_INBOX_SIZE;
         const InboxEntry& e = _inbox[idx];
         if (!e.valid) continue;
-        if (y + lineH > areaBottom) break;
-        display.setColor(DisplayDriver::LIGHT);
-        display.drawTextEllipsized(2, y, W - 4, e.text);
-        y += lineH;
+        if (y + MSG_LINE_H > areaBottom) break;
+        if (idx == _selectedSlot) drawTicker(display, y, e.text, e.isSent);
+        else                      drawMsgLine(display, y, e.text, e.isSent);
+        y += MSG_LINE_H;
       }
     }
 
@@ -292,7 +363,7 @@ public:
     display.setColor(DisplayDriver::LIGHT);
     display.drawRect(0, H - COMPOSE_BAR_H, W, COMPOSE_BAR_H - 1);
     display.drawTextEllipsized(3, H - COMPOSE_BAR_H + 4, W - 6, "Tap to compose");
-    return 500;
+    return (_selectedSlot >= 0) ? 60 : 500;
   }
 };
 

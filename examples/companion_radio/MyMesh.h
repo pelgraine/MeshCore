@@ -213,6 +213,19 @@ private:
   BaseSerialInterface *_serial;
   AbstractUITask* _ui;
 
+  // Sent message repeat tracking
+#define SENT_TRACK_SIZE          4
+#define SENT_FINGERPRINT_SIZE    12
+#define SENT_TRACK_EXPIRY_MS     30000  // stop tracking after 30 seconds
+  struct SentMsgTrack {
+    uint8_t fingerprint[SENT_FINGERPRINT_SIZE];
+    uint8_t repeat_count;
+    unsigned long sent_millis;
+    bool active;
+  };
+  SentMsgTrack _sent_track[SENT_TRACK_SIZE];
+  int _sent_track_idx;  // next slot in circular buffer
+
   ContactsIterator _iter;
   uint32_t _iter_filter_since;
   uint32_t _most_recent_lastmod;

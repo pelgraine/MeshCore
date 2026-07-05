@@ -42,5 +42,6 @@ public:
   virtual void msgRead(int msgcount) = 0;
   virtual void newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) = 0;
   virtual void notify(UIEventType t = UIEventType::none) = 0;
+  virtual void showAlert(const char* text, int duration_millis) {}
   virtual void loop() = 0;
 };
