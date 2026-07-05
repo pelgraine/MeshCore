@@ -28,6 +28,11 @@ void SerialBLEInterface::begin(const char* prefix, char* name, uint32_t pin_code
   BLEDevice::setSecurityCallbacks(this);
   BLEDevice::setMTU(MAX_FRAME_SIZE);
 
+  // Boost BLE TX power for improved range (+9 dBm, up from default +3 dBm)
+  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, ESP_PWR_LVL_P9);
+  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, ESP_PWR_LVL_P9);
+  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_SCAN, ESP_PWR_LVL_P9);
+
   BLESecurity  sec;
   sec.setStaticPIN(pin_code);
   sec.setAuthenticationMode(ESP_LE_AUTH_REQ_SC_MITM_BOND);

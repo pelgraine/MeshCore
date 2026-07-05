@@ -213,8 +213,13 @@ public:
     display.setColor(DisplayDriver::GREEN);
     char filtered_name[sizeof(_node_prefs->node_name)];
     display.translateUTF8ToBlocks(filtered_name, _node_prefs->node_name, sizeof(filtered_name));
-    display.setCursor(0, 0);
-    display.print(filtered_name);
+    // On the first page, a node name longer than 6 chars moves to a second line
+    // so it doesn't push the clock over the battery icon.
+    bool twoLineHeader = (_page == HomePage::FIRST && strlen(filtered_name) > 6);
+    if (!twoLineHeader) {
+      display.setCursor(0, 0);
+      display.print(filtered_name);
+    }
 
     // battery voltage
     renderBatteryIndicator(display, _task->getBattMilliVolts());
@@ -230,16 +235,25 @@ public:
         display.setColor(DisplayDriver::LIGHT);
         uint16_t tw = display.getTextWidth(timeBuf);
         int clockX = (display.width() - tw) / 2;
-        int nameRight = display.getTextWidth(filtered_name) + 4;
-        if (clockX < nameRight) clockX = nameRight;
+        if (!twoLineHeader) {
+          int nameRight = display.getTextWidth(filtered_name) + 4;
+          if (clockX < nameRight) clockX = nameRight;
+        }
         display.setCursor(clockX, 0);
         display.print(timeBuf);
       }
     }
 #endif
 
+    if (twoLineHeader) {   // node name on its own second line, left-aligned
+      display.setColor(DisplayDriver::GREEN);
+      display.setTextSize(1);
+      display.setCursor(0, 9);
+      display.print(filtered_name);
+    }
+
     // curr page indicator
-    int y = 14;
+    int y = twoLineHeader ? 23 : 14;
     int x = display.width() / 2 - 5 * (HomePage::Count-1);
     for (uint8_t i = 0; i < HomePage::Count; i++, x += 10) {
       if (i == _page) {
@@ -250,27 +264,28 @@ public:
     }
 
     if (_page == HomePage::FIRST) {
+      int off = twoLineHeader ? 9 : 0;
       display.setColor(DisplayDriver::YELLOW);
       display.setTextSize(2);
       sprintf(tmp, "MSG: %d", _task->getMsgCount());
-      display.drawTextCentered(display.width() / 2, 20, tmp);
+      display.drawTextCentered(display.width() / 2, 20 + off, tmp);
 
       #ifdef WIFI_SSID
         IPAddress ip = WiFi.localIP();
         snprintf(tmp, sizeof(tmp), "IP: %d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
         display.setTextSize(1);
-        display.drawTextCentered(display.width() / 2, 54, tmp);
+        display.drawTextCentered(display.width() / 2, 54 + off, tmp);
       #endif
       if (_task->hasConnection()) {
         display.setColor(DisplayDriver::GREEN);
         display.setTextSize(1);
-        display.drawTextCentered(display.width() / 2, 43, "< Connected >");
+        display.drawTextCentered(display.width() / 2, 43 + off, "< Connected >");
 
       } else if (the_mesh.getBLEPin() != 0) { // BT pin
         display.setColor(DisplayDriver::RED);
         display.setTextSize(2);
         sprintf(tmp, "Pin:%d", the_mesh.getBLEPin());
-        display.drawTextCentered(display.width() / 2, 43, tmp);
+        display.drawTextCentered(display.width() / 2, 43 + off, tmp);
       }
     } else if (_page == HomePage::RECENT) {
       the_mesh.getRecentlyHeard(recent, UI_RECENT_LIST_SIZE);
@@ -740,10 +755,11 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
   ((MsgPreviewScreen *) msg_preview)->addPreview(path_len, from_name, text);
 #ifdef TWATCH_COMPOSE_ENABLED
   if (tw_channel) ((TWatchChannelScreen*)tw_channel)->notifyMsg(from_name, text);
-  // Don't yank away from the compose screens on an incoming message.
-  if (curr != tw_picker && curr != tw_channel && curr != tw_keyboard)
-#endif
+  // Message preview popup removed on this build; incoming messages update the
+  // channel screen and counters without interrupting the current screen.
+#else
   setCurrScreen(msg_preview);
+#endif
 
   if (_display != NULL) {
     if (!_display->isOn() && !hasConnection()) {
