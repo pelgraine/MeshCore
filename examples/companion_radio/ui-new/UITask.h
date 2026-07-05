@@ -54,6 +54,11 @@ class UITask : public AbstractUITask {
 #if defined(UI_HAS_CLOCK_SCREEN)
   UIScreen* clock_screen;
 #endif
+#ifdef TWATCH_COMPOSE_ENABLED
+  UIScreen* tw_picker;
+  UIScreen* tw_channel;
+  UIScreen* tw_keyboard;
+#endif
   UIScreen* curr;
 
   void userLedHandler();

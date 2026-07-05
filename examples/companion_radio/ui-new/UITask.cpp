@@ -44,6 +44,10 @@ static bool clockLocalTime(uint32_t now, int& hrs, int& mins) {
 
 #include "icons.h"
 
+#ifdef TWATCH_COMPOSE_ENABLED
+  #include "TWatchComposeScreens.h"
+#endif
+
 class SplashScreen : public UIScreen {
   UITask* _task;
   unsigned long dismiss_after;
@@ -193,6 +197,8 @@ public:
   HomeScreen(UITask* task, mesh::RTCClock* rtc, SensorManager* sensors, NodePrefs* node_prefs)
      : _task(task), _rtc(rtc), _sensors(sensors), _node_prefs(node_prefs), _page(0),
        _shutdown_init(false), sensors_lpp(200) {  }
+
+  bool isFirstPage() const { return _page == HomePage::FIRST; }
 
   void poll() override {
     if (_shutdown_init && !_task->isButtonPressed()) {  // must wait for USR button to be released
@@ -678,6 +684,11 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 #if defined(UI_HAS_CLOCK_SCREEN)
   clock_screen = new ClockScreen(this, &rtc_clock);
 #endif
+#ifdef TWATCH_COMPOSE_ENABLED
+  tw_picker   = new TWatchChannelPicker(_display);
+  tw_channel  = new TWatchChannelScreen(_display);
+  tw_keyboard = new TWatchKeyboardScreen(_display);
+#endif
   setCurrScreen(splash);
 }
 
@@ -727,6 +738,11 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
   _msgcount = msgcount;
 
   ((MsgPreviewScreen *) msg_preview)->addPreview(path_len, from_name, text);
+#ifdef TWATCH_COMPOSE_ENABLED
+  if (tw_channel) ((TWatchChannelScreen*)tw_channel)->notifyMsg(from_name, text);
+  // Don't yank away from the compose screens on an incoming message.
+  if (curr != tw_picker && curr != tw_channel && curr != tw_keyboard)
+#endif
   setCurrScreen(msg_preview);
 
   if (_display != NULL) {
@@ -920,6 +936,56 @@ void UITask::loop() {
 
   if (curr) curr->poll();
 
+#ifdef TWATCH_COMPOSE_ENABLED
+  // Channel picker -> channel screen (long-press select) / exit
+  if (curr == tw_picker) {
+    TWatchChannelPicker* picker = (TWatchChannelPicker*)tw_picker;
+    if (picker->isConfirmed()) {
+      ((TWatchChannelScreen*)tw_channel)->activate(picker->getSelectedChannelIdx(),
+                                                   picker->getSelectedChannelName());
+      setCurrScreen(tw_channel);
+      picker->acknowledgeConfirm();
+    }
+    if (picker->wantsExit()) {
+      picker->acknowledgeExit();
+      gotoHomeScreen();
+    }
+  }
+  // Channel screen -> keyboard (compose bar tap) / exit
+  else if (curr == tw_channel) {
+    TWatchChannelScreen* cs = (TWatchChannelScreen*)tw_channel;
+    if (cs->wantsCompose()) {
+      cs->acknowledgeCompose();
+      ((TWatchKeyboardScreen*)tw_keyboard)->activate(cs->getChannelIdx(), cs->getChannelName());
+      setCurrScreen(tw_keyboard);
+    }
+    if (cs->wantsExit()) {
+      cs->acknowledgeExit();
+      gotoHomeScreen();
+    }
+  }
+  // Keyboard -> send on channel (returns to channel screen) / exit
+  else if (curr == tw_keyboard) {
+    TWatchKeyboardScreen* kb = (TWatchKeyboardScreen*)tw_keyboard;
+    if (kb->wantsExit()) {
+      kb->acknowledgeExit();
+      gotoHomeScreen();
+    }
+    const char* sendText = nullptr;
+    if (kb->consumeSendRequest(&sendText) && sendText) {
+      ChannelDetails ch;
+      if (the_mesh.getChannel(kb->getChannelIdx(), ch)) {
+        uint32_t ts = rtc_clock.getCurrentTime();
+        the_mesh.sendGroupMessage(ts, ch.channel, the_mesh.getNodeName(),
+                                  sendText, strlen(sendText));
+        showAlert("Sent!", 800);
+      }
+      kb->clearOutBuf();
+      setCurrScreen(tw_channel);
+    }
+  }
+#endif
+
   if (_display != NULL && _display->isOn()) {
     if (millis() >= _next_refresh && curr) {
       _display->startFrame();
@@ -1008,6 +1074,20 @@ char UITask::handleLongPress(char c) {
     the_mesh.enterCLIRescue();
     c = 0;   // consume event
   }
+#ifdef TWATCH_COMPOSE_ENABLED
+  else if (curr == home && ((HomeScreen*)home)->isFirstPage()) {   // long press on first home page -> channel picker
+    TWatchChannelPicker* picker = (TWatchChannelPicker*)tw_picker;
+    picker->beginChannelSelect();
+    ChannelDetails ch;
+    for (uint8_t i = 0; i < MAX_GROUP_CHANNELS; i++) {
+      if (the_mesh.getChannel(i, ch) && ch.name[0] != 0) {
+        picker->addChannel(i, ch.name);
+      }
+    }
+    setCurrScreen(tw_picker);
+    c = 0;   // consume event
+  }
+#endif
   return c;
 }
 
