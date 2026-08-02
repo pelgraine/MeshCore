@@ -3,6 +3,10 @@
 #include <Arduino.h> // needed for PlatformIO
 #include <Mesh.h>
 
+#ifdef MAGIC8BALL_BOT
+  #include "Magic8Ball.h"
+#endif
+
 #define CMD_APP_START                 1
 #define CMD_SEND_TXT_MSG              2
 #define CMD_SEND_CHANNEL_TXT_MSG      3
@@ -604,6 +608,22 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
     channel_name = channel_details.name;
   }
   if (_ui) _ui->newMsg(path_len, channel_name, text, offline_queue_len);
+#endif
+
+#ifdef MAGIC8BALL_BOT
+  {
+    int m8_idx = findChannelIdx(channel);
+    ChannelDetails m8_ch;
+    if (m8_idx >= 0 && getChannel(m8_idx, m8_ch)
+        && strcmp(m8_ch.name, MAGIC8BALL_CHANNEL_NAME) == 0
+        && magic8ball_isQuery(text)
+        && magic8ball_scopeMatches(pkt, MAGIC8BALL_SCOPE_NAME)
+        && magic8ball_allow(text, _ms->getMillis())) {
+      const char* m8_answer = MAGIC8BALL_ANSWERS[getRNG()->nextInt(0, MAGIC8BALL_NUM_ANSWERS)];
+      sendGroupMessage(getRTCClock()->getCurrentTime(), m8_ch.channel, _prefs.node_name,
+                       m8_answer, strlen(m8_answer));
+    }
+  }
 #endif
 }
 
