@@ -5,14 +5,14 @@
 #include "AbstractUITask.h"
 
 /*------------ Frame Protocol --------------*/
-#define FIRMWARE_VER_CODE 10
+#define FIRMWARE_VER_CODE 13
 
 #ifndef FIRMWARE_BUILD_DATE
-#define FIRMWARE_BUILD_DATE "24 Apr 2026"
+#define FIRMWARE_BUILD_DATE "5 Aug 2026"
 #endif
 
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "v1.14.1M"
+#define FIRMWARE_VERSION "v1.16.0MP"
 #endif
 
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
@@ -105,6 +105,7 @@ public:
 protected:
   float getAirtimeBudgetFactor() const override;
   int getInterferenceThreshold() const override;
+  bool getCADEnabled() const override;
   int calcRxDelay(float score, uint32_t air_time) const override;
   uint32_t getRetransmitDelay(const mesh::Packet *packet) override;
   uint32_t getDirectRetransmitDelay(const mesh::Packet *packet) override;
@@ -112,6 +113,7 @@ protected:
   bool filterRecvFloodPacket(mesh::Packet* packet) override;
   bool allowPacketForward(const mesh::Packet* packet) override;
 
+  void sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt, uint32_t delay_millis);
   void sendFloodScoped(const ContactInfo& recipient, mesh::Packet* pkt, uint32_t delay_millis=0) override;
   void sendFloodScoped(const mesh::GroupChannel& channel, mesh::Packet* pkt, uint32_t delay_millis=0) override;
 
@@ -163,7 +165,11 @@ protected:
   }
 
 public:
-  void savePrefs() { _store->savePrefs(_prefs, sensors.node_lat, sensors.node_lon); }
+  void savePrefs() {
+    _prefs.node_lat = sensors.node_lat;
+    _prefs.node_lon = sensors.node_lon;
+    _store->savePrefs(_prefs);
+  }
 
 #ifdef MORSE_COMPOSE_ENABLED
   // Queue a locally-originated channel message for BLE companion app sync.
@@ -184,6 +190,9 @@ public:
     }
   }
 #endif
+
+  // To check if there is pending work
+  bool hasPendingWork() const;
 
 private:
   void writeOKFrame();
@@ -206,7 +215,7 @@ private:
 
   // helpers, short-cuts
   void saveChannels() { _store->saveChannels(this); }
-  void saveContacts() { _store->saveContacts(this); }
+  void saveContacts();
 
   DataStore* _store;
   NodePrefs _prefs;
@@ -223,6 +232,7 @@ private:
   uint32_t _active_ble_pin;
   bool _iter_started;
   bool _cli_rescue;
+  bool send_unscoped;   // force un-scoped flood (instead of using send_scope)
   char cli_command[80];
   uint8_t app_target_ver;
   uint8_t *sign_data;
