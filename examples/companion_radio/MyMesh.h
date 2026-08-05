@@ -177,9 +177,6 @@ public:
   void queueSentChannelMessage(uint8_t channel_idx, uint32_t timestamp, const char* text);
 #endif
 
-  // To check if there is pending work (for power saving)
-  bool hasPendingWork() const;
-
 #if ENV_INCLUDE_GPS == 1
   void applyGpsPrefs() {
     sensors.setSettingValue("gps", _prefs.gps_enabled ? "1" : "0");
