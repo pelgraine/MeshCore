@@ -4,7 +4,7 @@ Morse Compose lets you type and send messages on any configured channel using th
 
 ## Getting In and Out
 
-**Enter**: Double-click the button from the home screen. A channel picker appears — click to cycle between channels, then double-click to select. The Morse compose screen opens on the chosen channel.
+**Enter**: Double-click the button from the home screen. A channel picker appears — click to cycle between channels, then double-click to select. The Morse compose screen opens on the chosen channel. If you have more channels than fit on the screen, the list scrolls as you cycle past the bottom, and a `^` or `v` marker appears at the right edge to show the list continues in that direction.
 
 **Exit**: Hold the button for **9 seconds**, then release. The display shows `[EXIT]` when the threshold is reached. You can also exit by long-pressing from the channel picker.
 
@@ -109,7 +109,7 @@ Two special Morse patterns also work as alternatives:
 The Morse screen shows four sections:
 
 - **Header**: "MORSE > channelname" showing which channel you're composing on. When a hold action is armed, `[BKSP]`, `[SEND]`, or `[EXIT]` appears on the right.
-- **IN**: The last 2 incoming messages on the selected channel only (messages from other channels are filtered out).
+- **IN**: The last 7 incoming messages on the selected channel only (messages from other channels are filtered out). A message too long to fit its line is shown a section at a time: each section stays for 3 seconds, then the next one appears, and after the last section it loops back to the start. Nothing to press, and a long message still only uses one line.
 - **OUT**: Your composed message so far, with a cursor.
 - **KEY**: Shows "ready" during normal use. During a hold, shows the armed action.
 
@@ -126,4 +126,6 @@ Sent messages also appear in the MeshCore companion app's channel history if BLE
 - The display doesn't update during active keying to avoid blocking button presses — your letters appear when the 1-second letter gap commits them
 - M (— —) requires **two separate presses**, each held for about half a second, with a brief release between them
 - **Hold durations are the easiest way to send, backspace, and exit** — just hold and watch the display for `[BKSP]`, `[SEND]`, or `[EXIT]`, then release
+- Long incoming messages page through by themselves. If a message in the IN list is cut off, wait and the rest will come round
+- Incoming messages are stored up to 95 characters, so anything longer is trimmed before it reaches the IN list
 - The WW prosign and HH prosign still work as alternatives for advanced users
