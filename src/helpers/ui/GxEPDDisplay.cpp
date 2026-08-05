@@ -1,4 +1,3 @@
-
 #include "GxEPDDisplay.h"
 
 #ifdef EXP_PIN_BACKLIGHT
@@ -82,6 +81,9 @@ void GxEPDDisplay::startFrame(ColorVal bkg) {
 void GxEPDDisplay::setTextSize(int sz) {
   display_crc.update<int>(sz);
   switch(sz) {
+    case 0:  // Tiny - built-in 6x8 pixel font
+      display.setFont(NULL);
+      break;
     case 1:  // Small
       display.setFont(&FreeSans9pt7b);
       break;

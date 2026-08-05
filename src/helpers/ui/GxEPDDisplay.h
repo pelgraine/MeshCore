@@ -38,10 +38,18 @@ class GxEPDDisplay : public DisplayDriver {
   int last_display_crc_value = 0;
 
 public:
+// Virtual canvas dimensions - default 128x128 (MeshCore standard).
+// Override per variant for panels whose usable logical area is not 128x128.
+#ifndef EINK_VIRTUAL_W
+  #define EINK_VIRTUAL_W 128
+#endif
+#ifndef EINK_VIRTUAL_H
+  #define EINK_VIRTUAL_H 128
+#endif
 #if defined(EINK_DISPLAY_MODEL)
-  GxEPDDisplay() : DisplayDriver(128, 128), display(EINK_DISPLAY_MODEL(PIN_DISPLAY_CS, PIN_DISPLAY_DC, PIN_DISPLAY_RST, PIN_DISPLAY_BUSY)) {}
+  GxEPDDisplay() : DisplayDriver(EINK_VIRTUAL_W, EINK_VIRTUAL_H), display(EINK_DISPLAY_MODEL(PIN_DISPLAY_CS, PIN_DISPLAY_DC, PIN_DISPLAY_RST, PIN_DISPLAY_BUSY)) {}
 #else
-  GxEPDDisplay() : DisplayDriver(128, 128), display(GxEPD2_150_BN(DISP_CS, DISP_DC, DISP_RST, DISP_BUSY)) {}
+  GxEPDDisplay() : DisplayDriver(EINK_VIRTUAL_W, EINK_VIRTUAL_H), display(GxEPD2_150_BN(DISP_CS, DISP_DC, DISP_RST, DISP_BUSY)) {}
 #endif
 
   bool begin();

@@ -66,9 +66,46 @@ extern MomentaryButton user_btn;
 // Buffer sizes
 #define MORSE_OUT_BUF_LEN      134   // MeshCore per-channel msg cap is ~133
 #define MORSE_STAGING_MAX      12    // longest pattern we accept (HH = 8)
-#define MORSE_INBOX_SIZE       3
+#define MORSE_INBOX_SIZE       7
 #define MORSE_INBOX_TEXT_LEN   96
 #define MORSE_INBOX_NAME_LEN   32
+
+// -----------------------------------------------------------------------------
+// Screen layout. All values are virtual units, for text size 0 (the built-in
+// 6x8 pixel font).
+//
+// Coordinate note: setCursor() adds EINK_Y_OFFSET before scaling, drawRect()
+// does not, so a rule and a text row at the same y do NOT line up. Use
+// MORSE_RULE_Y() to get the rule y that sits just above a given text row.
+//
+// Also note that with a custom GFX font the y passed to setCursor() is the
+// text baseline, but with the built-in font it is the TOP of the glyph box.
+// These values assume the built-in font.
+// -----------------------------------------------------------------------------
+#define MORSE_TEXT_SIZE        0
+#define MORSE_LINE_H           8     // virtual units between text rows
+#define MORSE_RULE_Y(text_y)   ((text_y) + 8)
+#define MORSE_X_INDENT         14    // left edge of text sitting beside a label
+
+// EINK_Y_OFFSET pushes all text down by 10 virtual units before scaling, so a
+// negative y is what reaches the top band of the panel. -9 puts the header
+// glyphs at physical y 1.28, and 76 puts the KEY row at 110.08, about 4px
+// clear of the bottom edge.
+#define MORSE_Y_HEADER        -9
+#define MORSE_Y_IN             0
+#define MORSE_IN_ROWS          7     // incoming messages shown; <= MORSE_INBOX_SIZE
+#define MORSE_Y_OUT_LABEL      57
+#define MORSE_Y_OUT_TEXT       65
+#define MORSE_Y_KEY            76
+
+#define MORSE_PICKER_Y_FIRST   9
+#define MORSE_PICKER_ROW_H     8
+
+// Incoming-message ticker. An IN message too long for its row is shown one
+// window at a time, each held for this many milliseconds, cycling back to the
+// start after the last window. Set to 0 to disable stepping entirely (long
+// messages then just truncate, as before).
+#define MORSE_TICKER_MS        3000
 
 // -----------------------------------------------------------------------------
 // Morse lookup — ITU minimal + basic punctuation
@@ -103,6 +140,43 @@ enum HoldAction : uint8_t {
 };
 
 // -----------------------------------------------------------------------------
+// Fill `dst` with the slice of `src` that is visible at ticker step `step`.
+// A string that already fits in `avail` is copied whole and never steps.
+// `dst` doubles as the measuring scratch buffer. Returns the number of steps
+// the whole string takes, which is 1 when it fits.
+static int morseTickerWindow(DisplayDriver& display, const char* src, int avail,
+                             int step, char* dst, size_t dstSize) {
+  int len = (int)strlen(src);
+  if (len > (int)dstSize - 1) len = (int)dstSize - 1;
+
+  // How many characters fit in `avail`, measured from the start of the string
+  int fit = 0;
+  while (fit < len && fit < (int)dstSize - 1) {
+    dst[fit] = src[fit];
+    dst[fit + 1] = 0;
+    if (display.getTextWidth(dst) > avail) break;
+    fit++;
+  }
+  if (fit < 1) fit = 1;
+
+  if (len <= fit) {
+    memcpy(dst, src, len);
+    dst[len] = 0;
+    return 1;
+  }
+
+  int steps = (len + fit - 1) / fit;
+  if (step < 0) step = 0;
+  step %= steps;
+
+  int start = step * fit;
+  int n = len - start;
+  if (n > fit) n = fit;
+  memcpy(dst, src + start, n);
+  dst[n] = 0;
+  return steps;
+}
+
 class MorseScreen : public UIScreen {
   mesh::RTCClock* _rtc;
 
@@ -389,11 +463,11 @@ public:
   int render(DisplayDriver& display) override {
     const int W = display.width();
 
-    display.setTextSize(1);
+    display.setTextSize(MORSE_TEXT_SIZE);
 
     // ---- Header --------------------------------------------------------------
     display.setColor(UIColor::title_txt);
-    display.setCursor(0, 0);
+    display.setCursor(0, MORSE_Y_HEADER);
     char hdr[40];
     snprintf(hdr, sizeof(hdr), "MORSE > %s", _channelName);
     display.print(hdr);
@@ -405,38 +479,42 @@ public:
         _holdAction == HOLD_BACKSPACE ? "[BKSP]" :
         _holdAction == HOLD_SEND     ? "[SEND]" :
                                        "[EXIT]";
-      display.drawTextRightAlign(W - 1, 0, action);
+      display.drawTextRightAlign(W - 1, MORSE_Y_HEADER, action);
     }
 
     display.setColor(UIColor::primary_txt);
-    display.drawRect(0, 11, W, 1);
+    display.drawRect(0, MORSE_RULE_Y(MORSE_Y_IN), W, 1);
 
-    // ---- Inbox (last 2 messages) ---------------------------------------------
+    // ---- Inbox ---------------------------------------------------------------
     display.setColor(UIColor::title_txt);
-    display.setCursor(0, 13);
+    display.setCursor(0, MORSE_Y_IN);
     display.print("IN");
 
     display.setColor(UIColor::primary_txt);
     if (_inboxCount == 0) {
-      display.setCursor(18, 13);
+      display.setCursor(MORSE_X_INDENT, MORSE_Y_IN);
       display.print("(no messages)");
     } else {
-      int y = 13;
-      for (int i = 0; i < _inboxCount && i < 2; i++) {
+      int y = MORSE_Y_IN;
+      const int avail = W - MORSE_X_INDENT - 2;
+      const int step = (MORSE_TICKER_MS > 0) ? (int)(millis() / MORSE_TICKER_MS) : 0;
+      for (int i = 0; i < _inboxCount && i < MORSE_IN_ROWS; i++) {
         int idx = (int)_inboxNewest - i;
         while (idx < 0) idx += MORSE_INBOX_SIZE;
         const InboxEntry& e = _inbox[idx];
         if (!e.valid) continue;
-        display.drawTextEllipsized(18, y, W - 20, e.text);
-        y += 10;
+        char win[MORSE_INBOX_TEXT_LEN];
+        morseTickerWindow(display, e.text, avail, step, win, sizeof(win));
+        display.drawTextEllipsized(MORSE_X_INDENT, y, avail, win);
+        y += MORSE_LINE_H;
       }
     }
 
-    display.drawRect(0, 33, W, 1);
+    display.drawRect(0, MORSE_RULE_Y(MORSE_Y_OUT_LABEL), W, 1);
 
     // ---- Outgoing buffer -----------------------------------------------------
     display.setColor(UIColor::title_txt);
-    display.setCursor(0, 35);
+    display.setCursor(0, MORSE_Y_OUT_LABEL);
     display.print("OUT");
 
     display.setColor(UIColor::primary_txt);
@@ -452,21 +530,21 @@ public:
         outWithCursor[n + 1] = 0;
       }
     }
-    display.setCursor(0, 46);
+    display.setCursor(0, MORSE_Y_OUT_TEXT);
     display.printWordWrap(outWithCursor, W);
 
-    display.drawRect(0, 66, W, 1);
+    display.drawRect(0, MORSE_RULE_Y(MORSE_Y_KEY), W, 1);
 
     // ---- Staging + char count ------------------------------------------------
     // CRITICAL: The KEY area must NOT change CRC during active dot/dash input.
     // Any CRC change triggers a 644ms e-ink block that eats button presses.
-    // Only hold actions (3s+) change the display here — by then the user has
+    // Only hold actions (3s+) change the display here - by then the user has
     // stopped rapid-pressing so one render block is harmless.
     display.setColor(UIColor::title_txt);
-    display.setCursor(0, 68);
+    display.setCursor(0, MORSE_Y_KEY);
     display.print("KEY");
 
-    display.setCursor(26, 68);
+    display.setCursor(MORSE_X_INDENT, MORSE_Y_KEY);
     if (_holdAction != HOLD_NONE) {
       display.setColor(UIColor::title_txt);
       const char* action =
@@ -484,7 +562,7 @@ public:
     char ccBuf[12];
     snprintf(ccBuf, sizeof(ccBuf), "%u/%u", (unsigned)_outLen,
              (unsigned)(MORSE_OUT_BUF_LEN - 1));
-    display.drawTextRightAlign(W - 1, 68, ccBuf);
+    display.drawTextRightAlign(W - 1, MORSE_Y_KEY, ccBuf);
 
     // Hint: Hold 3s=bksp 7s=send 9s=exit  |  WW=send  HH=bksp
 
@@ -518,12 +596,13 @@ class MorseChannelPicker : public UIScreen {
   ChannelEntry _channels[MORSE_PICKER_MAX_CHANNELS];
   uint8_t      _numChannels;
   uint8_t      _highlighted;
+  uint8_t      _firstVisible;   // index of the top row currently on screen
   bool         _confirmed;
   bool         _wantsExit;
 
 public:
   MorseChannelPicker()
-    : _numChannels(0), _highlighted(0), _confirmed(false), _wantsExit(false)
+    : _numChannels(0), _highlighted(0), _firstVisible(0), _confirmed(false), _wantsExit(false)
   {
     memset(_channels, 0, sizeof(_channels));
   }
@@ -531,6 +610,7 @@ public:
   void activate() {
     _numChannels = 0;
     _highlighted = 0;
+    _firstVisible = 0;
     _confirmed = false;
     _wantsExit = false;
     memset(_channels, 0, sizeof(_channels));
@@ -565,31 +645,45 @@ public:
 
   int render(DisplayDriver& display) override {
     const int W = display.width();
+    const int H = display.height();
 
-    display.setTextSize(1);
+    display.setTextSize(MORSE_TEXT_SIZE);
     display.setColor(UIColor::title_txt);
     display.setCursor(0, 0);
     display.print("SELECT CHANNEL");
 
     display.setColor(UIColor::primary_txt);
-    display.drawRect(0, 11, W, 1);
+    display.drawRect(0, MORSE_RULE_Y(MORSE_PICKER_Y_FIRST), W, 1);
 
-    int y = 16;
-    for (uint8_t i = 0; i < _numChannels; i++) {
-      if (i == _highlighted) {
-        display.setColor(UIColor::window_bkg);
-        display.fillRect(0, y - 1, W, 12);
-        display.setColor(UIColor::primary_txt);
-      } else {
-        display.setColor(UIColor::primary_txt);
-      }
+    // How many rows fit under the header, from the panel's real usable height
+    int visible = (H - MORSE_PICKER_Y_FIRST) / MORSE_PICKER_ROW_H;
+    if (visible < 1) visible = 1;
+    if (visible > _numChannels) visible = _numChannels;
+
+    // Slide the window so the highlight is always on screen
+    if (_highlighted < _firstVisible) _firstVisible = _highlighted;
+    if (_highlighted >= _firstVisible + visible)
+      _firstVisible = _highlighted - visible + 1;
+    if (_firstVisible + visible > _numChannels)
+      _firstVisible = (_numChannels > visible) ? (_numChannels - visible) : 0;
+
+    int y = MORSE_PICKER_Y_FIRST;
+    for (uint8_t i = _firstVisible; i < _numChannels && i < _firstVisible + visible; i++) {
+      display.setColor(UIColor::primary_txt);
       char line[40];
       snprintf(line, sizeof(line), "  %s", _channels[i].name);
       if (i == _highlighted) line[0] = '>';
       display.setCursor(0, y);
       display.print(line);
-      y += 14;
+      y += MORSE_PICKER_ROW_H;
     }
+
+    // More-above / more-below markers
+    display.setColor(UIColor::primary_txt);
+    if (_firstVisible > 0)
+      display.drawTextRightAlign(W - 1, MORSE_PICKER_Y_FIRST, "^");
+    if (_firstVisible + visible < _numChannels)
+      display.drawTextRightAlign(W - 1, y - MORSE_PICKER_ROW_H, "v");
 
     // Hint: Click=next  DblClick=select  LongPress=exit
 
