@@ -9,6 +9,13 @@
 #define BRIDGE_MAX_BAUD 115200
 #endif
 
+// Upper bound for the configurable LoRa bandwidth (kHz). Defaults to 500 (sub-GHz
+// SX12xx parts). 2.4 GHz builds (SX1280 / LR1121) override this so the wide 2.4 GHz
+// bandwidths (812.5 kHz, etc.) are accepted by the freq/region validation below.
+#ifndef LORA_MAX_BW
+#define LORA_MAX_BW 500.0f
+#endif
+
 // Believe it or not, this std C function is busted on some platforms!
 static uint32_t _atoi(const char* sp) {
   uint32_t n = 0;
@@ -110,7 +117,7 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {  // Legacy 
     _prefs->direct_tx_delay_factor = constrain(_prefs->direct_tx_delay_factor, 0, 2.0f);
     _prefs->airtime_factor = constrain(_prefs->airtime_factor, 0, 9.0f);
     _prefs->freq = constrain(_prefs->freq, 150.0f, 2500.0f);
-    _prefs->bw = constrain(_prefs->bw, 7.8f, 500.0f);
+    _prefs->bw = constrain(_prefs->bw, 7.8f, LORA_MAX_BW);
     _prefs->sf = constrain(_prefs->sf, 5, 12);
     _prefs->cr = constrain(_prefs->cr, 5, 8);
     _prefs->tx_power_dbm = constrain(_prefs->tx_power_dbm, -9, 30);
@@ -247,7 +254,7 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
       uint8_t sf  = num > 2 ? atoi(parts[2]) : 0;
       uint8_t cr  = num > 3 ? atoi(parts[3]) : 0;
       int temp_timeout_mins  = num > 4 ? atoi(parts[4]) : 0;
-      if (freq >= 150.0f && freq <= 2500.0f && sf >= 5 && sf <= 12 && cr >= 5 && cr <= 8 && bw >= 7.0f && bw <= 500.0f && temp_timeout_mins > 0) {
+      if (freq >= 150.0f && freq <= 2500.0f && sf >= 5 && sf <= 12 && cr >= 5 && cr <= 8 && bw >= 7.0f && bw <= LORA_MAX_BW && temp_timeout_mins > 0) {
         _callbacks->applyTempRadioParams(freq, bw, sf, cr, temp_timeout_mins);
         sprintf(reply, "OK - temp params for %d mins", temp_timeout_mins);
       } else {
@@ -593,7 +600,7 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
     float bw    = num > 1 ? strtof(parts[1], nullptr) : 0.0f;
     uint8_t sf  = num > 2 ? atoi(parts[2]) : 0;
     uint8_t cr  = num > 3 ? atoi(parts[3]) : 0;
-    if (freq >= 150.0f && freq <= 2500.0f && sf >= 5 && sf <= 12 && cr >= 5 && cr <= 8 && bw >= 7.0f && bw <= 500.0f) {
+    if (freq >= 150.0f && freq <= 2500.0f && sf >= 5 && sf <= 12 && cr >= 5 && cr <= 8 && bw >= 7.0f && bw <= LORA_MAX_BW) {
       _prefs->sf = sf;
       _prefs->cr = cr;
       _prefs->freq = freq;

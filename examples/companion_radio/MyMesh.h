@@ -48,6 +48,10 @@
 #ifndef LORA_CR
 #define LORA_CR 5
 #endif
+// Upper bound for the configurable bandwidth (kHz). 2.4 GHz builds override this.
+#ifndef LORA_MAX_BW
+#define LORA_MAX_BW 500.0f
+#endif
 #ifndef LORA_TX_POWER
 #define LORA_TX_POWER 20
 #endif
