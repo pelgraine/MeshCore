@@ -5,7 +5,6 @@
 #include <helpers/radiolib/RadioLibWrappers.h>
 #include <helpers/ESP32Board.h>
 #include <helpers/radiolib/CustomLR1121Wrapper.h>
-#include <helpers/AutoDiscoverRTCClock.h>
 #include <helpers/SensorManager.h>
 #ifdef DISPLAY_CLASS
   #include <helpers/ui/SSD1306Display.h>
@@ -14,7 +13,7 @@
 
 extern ESP32Board board;
 extern WRAPPER_CLASS radio_driver;
-extern AutoDiscoverRTCClock rtc_clock;
+extern ESP32RTCClock rtc_clock;
 extern SensorManager sensors;
 
 #ifdef DISPLAY_CLASS

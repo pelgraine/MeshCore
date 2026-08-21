@@ -7,8 +7,15 @@ static SPIClass spi;
 RADIO_CLASS radio = new Module(P_LORA_NSS, P_LORA_DIO_1, P_LORA_RESET, P_LORA_BUSY, spi);
 WRAPPER_CLASS radio_driver(radio, board);
 
-ESP32RTCClock fallback_clock;
-AutoDiscoverRTCClock rtc_clock(fallback_clock);
+// NOTE: this board's RTC is a PCF85063, which shares I2C address 0x51 with the
+// PCF8563. AutoDiscoverRTCClock has no PCF85063 driver, so its 0x51 probe binds
+// the PCF8563 driver to the wrong chip and the clock reads a garbage year-2106
+// time that cannot be corrected ('time' refuses to go backwards, and writes land
+// in the wrong registers so 'clkreboot' does not stick). Until a proper PCF85063
+// driver exists upstream, use the ESP32 internal clock: it starts at 15 May 2024
+// on power-up, survives soft reboots, and is set with 'time <epoch>' over serial
+// or by the app's clock sync.
+ESP32RTCClock rtc_clock;
 SensorManager sensors;
 
 #ifdef DISPLAY_CLASS
@@ -46,8 +53,7 @@ static const Module::RfSwitchMode_t rfswitch_table[] = {
 };
 
 bool radio_init() {
-  fallback_clock.begin();
-  rtc_clock.begin(Wire);
+  rtc_clock.begin();
 
 #ifdef LR11X0_DIO3_TCXO_VOLTAGE
   float tcxo = LR11X0_DIO3_TCXO_VOLTAGE;
