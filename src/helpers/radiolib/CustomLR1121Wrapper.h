@@ -9,14 +9,26 @@ public:
   CustomLR1121Wrapper(CustomLR1121& radio, mesh::MainBoard& board) : RadioLibWrapper(radio, board) { }
 
   void setParams(float freq, float bw, uint8_t sf, uint8_t cr) override {
-    ((CustomLR1121 *)_radio)->setFrequency(freq);
-    ((CustomLR1121 *)_radio)->setSpreadingFactor(sf);
-    ((CustomLR1121 *)_radio)->setBandwidth(bw, freq > 1000.0f);   // high-mode BW on the 2.4 GHz band
-    ((CustomLR1121 *)_radio)->setCodingRate(cr);
+    // The LR11x0 family only accepts configuration commands in standby. Issued
+    // while the chip is receiving they are refused, and because the return
+    // codes were discarded the radio silently stayed on its previous plan
+    // (tempradio, the automatic revert and app radio changes never took effect
+    // until a reboot). Drop to standby first: idle() also flags the wrapper so
+    // the dispatcher issues a fresh startReceive() on the new plan.
+    RadioLibWrapper::idle();
+    CustomLR1121* radio = (CustomLR1121 *)_radio;
+    int16_t st = radio->setFrequency(freq);
+    if (st != RADIOLIB_ERR_NONE) { MESH_DEBUG_PRINTLN("LR1121 setParams: setFrequency failed (%d)", st); }
+    st = radio->setSpreadingFactor(sf);
+    if (st != RADIOLIB_ERR_NONE) { MESH_DEBUG_PRINTLN("LR1121 setParams: setSpreadingFactor failed (%d)", st); }
+    st = radio->setBandwidth(bw, freq > 1000.0f);   // high-mode BW on the 2.4 GHz band
+    if (st != RADIOLIB_ERR_NONE) { MESH_DEBUG_PRINTLN("LR1121 setParams: setBandwidth failed (%d)", st); }
+    st = radio->setCodingRate(cr);
+    if (st != RADIOLIB_ERR_NONE) { MESH_DEBUG_PRINTLN("LR1121 setParams: setCodingRate failed (%d)", st); }
     updatePreamble(sf);
     PacketMillis pm = calcMaxPacketMillis(sf, bw, cr, preambleLengthForSF(sf));
-    ((CustomLR1121 *)_radio)->setPreambleMillis(pm.preambleMillis);
-    ((CustomLR1121 *)_radio)->setMaxPayloadMillis(pm.payloadMillis);
+    radio->setPreambleMillis(pm.preambleMillis);
+    radio->setMaxPayloadMillis(pm.payloadMillis);
   }
 
   bool isReceivingPacket() override {
