@@ -12,7 +12,24 @@ WRAPPER_CLASS radio_driver(radio, board);
 VolatileRTCClock fallback_clock;
 AutoDiscoverRTCClock rtc_clock(fallback_clock);
 
-#ifdef ENV_INCLUDE_GPS
+#if defined(ENV_INCLUDE_GPS) && defined(WIO_TRACKER_L1_EINK)
+// Count NMEA sentences on the way to the parser (shown on the GPS home page),
+// and put the L76K into multi-constellation mode each time it is powered up.
+GPSStreamCounter gpsStream(Serial1);
+
+class L76KLocationProvider : public MicroNMEALocationProvider {
+public:
+  L76KLocationProvider(Stream& ser, mesh::RTCClock* clock) : MicroNMEALocationProvider(ser, clock) {}
+  void begin() override {
+    MicroNMEALocationProvider::begin();   // wakes the module via the standby pin
+    delay(300);                           // let it finish booting before it will take config
+    Serial1.print("$PCAS04,7*1E\r\n");    // GPS + GLONASS + BeiDou
+    gpsStream.resetCounters();
+  }
+};
+L76KLocationProvider nmea = L76KLocationProvider(gpsStream, &rtc_clock);
+EnvironmentSensorManager sensors = EnvironmentSensorManager(nmea);
+#elif defined(ENV_INCLUDE_GPS)
 MicroNMEALocationProvider nmea = MicroNMEALocationProvider(Serial1, &rtc_clock);
 EnvironmentSensorManager sensors = EnvironmentSensorManager(nmea);
 #else

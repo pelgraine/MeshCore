@@ -40,6 +40,10 @@
   #include "JoystickComposeScreens.h"
   JCHistory jc_history;
 #endif
+#if defined(WIO_TRACKER_L1_EINK) && ENV_INCLUDE_GPS == 1
+  #include "GPSStreamCounter.h"   // variants/wio-tracker-l1/ is on the include path
+  extern GPSStreamCounter gpsStream;   // defined in variants/wio-tracker-l1/target.cpp
+#endif
 
 class SplashScreen : public UIScreen {
   UITask* _task;
@@ -428,6 +432,11 @@ public:
       display.setCursor(0, 53);
       sprintf(tmp, "Noise floor: %d", radio_driver.getNoiseFloor());
       display.print(tmp);
+#if defined(WIO_TRACKER_L1_EINK)
+      display.setCursor(0, 64);
+      sprintf(tmp, "RX pkts: %lu", (unsigned long)radio_driver.getPacketsRecv());
+      display.print(tmp);
+#endif
     } else if (_page == HomePage::BLUETOOTH) {
       display.setColor(UIColor::corp_blue);
       display.drawXbm((display.width() - 32) / 2, 18,
@@ -474,6 +483,20 @@ public:
         sprintf(buf, "%d", nmea->satellitesCount());
         display.drawTextRightAlign(display.width()-1, y, buf);
         y = y + 12;
+#if defined(WIO_TRACKER_L1_EINK)
+        // NMEA sentence counter: confirms baud rate and data flow
+        display.setColor(UIColor::secondary_txt);
+        display.drawTextLeftAlign(0, y, "nmea");
+        display.setColor(UIColor::primary_txt);
+        if (gps_state) {
+          sprintf(buf, "%u/s (%lu)", gpsStream.getSentencesPerSec(),
+                  (unsigned long)gpsStream.getSentenceCount());
+        } else {
+          strcpy(buf, "hw off");
+        }
+        display.drawTextRightAlign(display.width()-1, y, buf);
+        y = y + 12;
+#endif
         display.setColor(UIColor::secondary_txt);
         display.drawTextLeftAlign(0, y, "pos");
         display.setColor(UIColor::primary_txt);

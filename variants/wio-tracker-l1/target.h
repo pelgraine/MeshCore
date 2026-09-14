@@ -18,6 +18,11 @@
 #endif
 #include <helpers/sensors/EnvironmentSensorManager.h>
 
+#if defined(WIO_TRACKER_L1_EINK) && defined(ENV_INCLUDE_GPS)
+  #include "GPSStreamCounter.h"
+  extern GPSStreamCounter gpsStream;
+#endif
+
 extern WioTrackerL1Board board;
 extern WRAPPER_CLASS radio_driver;
 extern AutoDiscoverRTCClock rtc_clock;
@@ -34,4 +39,3 @@ extern EnvironmentSensorManager sensors;
 
 bool radio_init();
 mesh::LocalIdentity radio_new_identity();
-
