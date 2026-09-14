@@ -64,6 +64,29 @@
 #define JC_RECT_H           11    // box height around one 8px glyph row
 
 // -----------------------------------------------------------------------------
+// ASCII filter: the size-0 font draws each byte as a CP437 glyph, so emoji and
+// other UTF-8 multi-byte characters come out as runs of gibberish. Every byte of
+// a multi-byte UTF-8 sequence is >= 0x80, so dropping those bytes removes the
+// whole character cleanly. Also drops control characters other than space.
+// -----------------------------------------------------------------------------
+static inline void jc_copyAscii(char* dst, const char* src, size_t dstSize) {
+  size_t n = 0;
+  bool lastSpace = false;
+  for (const unsigned char* p = (const unsigned char*)src; *p && n + 1 < dstSize; p++) {
+    if (*p >= 0x80 || (*p < 0x20)) continue;
+    if (*p == ' ') {
+      if (lastSpace || n == 0) continue;   // collapse runs left by removed characters
+      lastSpace = true;
+    } else {
+      lastSpace = false;
+    }
+    dst[n++] = (char)*p;
+  }
+  while (n > 0 && dst[n - 1] == ' ') n--;   // trailing space left by a removed emoji
+  dst[n] = 0;
+}
+
+// -----------------------------------------------------------------------------
 // Shared message history (one ring for every channel)
 // -----------------------------------------------------------------------------
 struct JCHistoryEntry {
@@ -89,8 +112,7 @@ public:
     e.timestamp = ts;
     e.channel_idx = channel_idx;
     e.valid = true;
-    strncpy(e.text, text, JC_TEXT_LEN - 1);
-    e.text[JC_TEXT_LEN - 1] = 0;
+    jc_copyAscii(e.text, text, JC_TEXT_LEN);
     if (_count < JC_HISTORY_SIZE) _count++;
   }
 
@@ -157,8 +179,7 @@ public:
   void addChannel(uint8_t idx, const char* name) {
     if (_count >= JC_PICKER_MAX) return;
     _entries[_count].idx = idx;
-    strncpy(_entries[_count].name, name, JC_CH_NAME_LEN - 1);
-    _entries[_count].name[JC_CH_NAME_LEN - 1] = 0;
+    jc_copyAscii(_entries[_count].name, name, JC_CH_NAME_LEN);
     _count++;
   }
 
@@ -248,8 +269,7 @@ public:
 
   void activate(uint8_t idx, const char* name) {
     _channelIdx = idx;
-    strncpy(_channelName, name, JC_CH_NAME_LEN - 1);
-    _channelName[JC_CH_NAME_LEN - 1] = 0;
+    jc_copyAscii(_channelName, name, JC_CH_NAME_LEN);
     _scrollUp = 0;
     _composeSel = false;
     _wantsCompose = false;
@@ -438,8 +458,7 @@ public:
 
   void activate(uint8_t idx, const char* name) {
     _channelIdx = idx;
-    strncpy(_channelName, name, JC_CH_NAME_LEN - 1);
-    _channelName[JC_CH_NAME_LEN - 1] = 0;
+    jc_copyAscii(_channelName, name, JC_CH_NAME_LEN);
     _outLen = 0; _outBuf[0] = 0;
     _mode = LOWER;
     _row = 0; _col = 0;

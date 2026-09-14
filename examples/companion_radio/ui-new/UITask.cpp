@@ -185,6 +185,14 @@ class HomeScreen : public UIScreen {
   }
 
   void renderBatteryIndicator(DisplayDriver& display, uint16_t batteryMilliVolts) {
+#if defined(WIO_TRACKER_L1_EINK)
+    // voltage as text in place of the icon, e.g. "3.99v"
+    char volt_str[8];
+    snprintf(volt_str, sizeof(volt_str), "%d.%02dv", batteryMilliVolts / 1000, (batteryMilliVolts % 1000) / 10);
+    display.setColor(UIColor::title_txt);
+    display.drawTextRightAlign(display.width() - 5, 2, volt_str);
+    return;
+#endif
     int batteryPercentage = calcBatteryPercentage(batteryMilliVolts);
 
     // battery icon
@@ -916,6 +924,11 @@ switch(t){
 void UITask::msgRead(int msgcount) {
   _msgcount = msgcount;
   if (msgcount == 0) {
+#ifdef UI_JOYSTICK_COMPOSE
+    // Only dismiss the message-preview screen; the phone draining the queue
+    // (which happens right after our own send) must not leave the compose views.
+    if (curr == jc_picker || curr == jc_channel || curr == jc_keyboard) return;
+#endif
     gotoHomeScreen();
   }
 }
@@ -1023,6 +1036,7 @@ void UITask::loop() {
   } else if (ev == BUTTON_EVENT_LONG_PRESS) {
     c = handleLongPress(KEY_ENTER);  // REVISIT: could be mapped to different key code
   }
+#ifndef UI_JOYSTICK_COMPOSE
   ev = joystick_left.check();
   if (ev == BUTTON_EVENT_CLICK) {
     c = checkDisplayOn(KEY_LEFT);
@@ -1035,6 +1049,32 @@ void UITask::loop() {
   } else if (ev == BUTTON_EVENT_LONG_PRESS) {
     c = handleLongPress(KEY_RIGHT);
   }
+#else
+  // The JOYSTICK_* pin names in variant.h are for the OLED L1's portrait
+  // orientation. The e-ink panel is landscape, rotated a quarter turn, so the
+  // physical directions map: up -> JOYSTICK_LEFT, down -> JOYSTICK_RIGHT,
+  // left -> JOYSTICK_DOWN, right -> JOYSTICK_UP.
+  ev = joystick_left.check();
+  if (ev == BUTTON_EVENT_CLICK) {
+    c = checkDisplayOn(KEY_UP);
+  } else if (ev == BUTTON_EVENT_LONG_PRESS) {
+    c = handleLongPress(KEY_UP);
+  }
+  ev = joystick_right.check();
+  if (ev == BUTTON_EVENT_CLICK) {
+    c = checkDisplayOn(KEY_DOWN);
+  } else if (ev == BUTTON_EVENT_LONG_PRESS) {
+    c = handleLongPress(KEY_DOWN);
+  }
+  ev = joystick_down.check();
+  if (ev == BUTTON_EVENT_CLICK) {
+    c = checkDisplayOn(KEY_LEFT);
+  }
+  ev = joystick_up.check();
+  if (ev == BUTTON_EVENT_CLICK) {
+    c = checkDisplayOn(KEY_RIGHT);
+  }
+#endif
   ev = back_btn.check();
   if (ev == BUTTON_EVENT_TRIPLE_CLICK) {
     c = handleTripleClick(KEY_SELECT);
@@ -1042,14 +1082,6 @@ void UITask::loop() {
 #ifdef UI_JOYSTICK_COMPOSE
   else if (ev == BUTTON_EVENT_CLICK) {
     c = checkDisplayOn(KEY_CANCEL);
-  }
-  ev = joystick_up.check();
-  if (ev == BUTTON_EVENT_CLICK) {
-    c = checkDisplayOn(KEY_UP);
-  }
-  ev = joystick_down.check();
-  if (ev == BUTTON_EVENT_CLICK) {
-    c = checkDisplayOn(KEY_DOWN);
   }
 #endif
 #elif defined(PIN_USER_BTN)
@@ -1204,7 +1236,7 @@ void UITask::loop() {
         snprintf(fullMsg, sizeof(fullMsg), "%s: %s", the_mesh.getNodeName(), sendText);
         the_mesh.queueSentChannelMessage(ch_idx, ts, fullMsg);
         jc_history.add(ch_idx, ts, fullMsg);
-        showAlert("Sent!", 800);
+        showAlert("Sent!", 3000);
       }
       kb->clearOutBuf();
       ((JCChannelScreen*)jc_channel)->resume();
