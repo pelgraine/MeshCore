@@ -36,6 +36,10 @@
 #ifdef MORSE_COMPOSE_ENABLED
   #include "MorseScreen.h"
 #endif
+#ifdef UI_JOYSTICK_COMPOSE
+  #include "JoystickComposeScreens.h"
+  JCHistory jc_history;
+#endif
 
 class SplashScreen : public UIScreen {
   UITask* _task;
@@ -610,6 +614,10 @@ public:
     return 5000;   // next render after 5000 ms
   }
 
+#ifdef UI_JOYSTICK_COMPOSE
+  bool isFirstPage() const { return _page == HomePage::FIRST; }
+#endif
+
   bool handleInput(char c) override {
 #ifdef HELTEC_MESH_POCKET
     if (_display_blanked) {
@@ -839,6 +847,11 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   morse_screen = new MorseScreen(&rtc_clock);
   morse_channel_picker = new MorseChannelPicker();
 #endif
+#ifdef UI_JOYSTICK_COMPOSE
+  jc_picker = new JCChannelPicker();
+  jc_channel = new JCChannelScreen();
+  jc_keyboard = new JCKeyboardScreen();
+#endif
   setCurrScreen(splash);
 }
 
@@ -887,7 +900,7 @@ void UITask::msgRead(int msgcount) {
 void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) {
   _msgcount = msgcount;
 
-#ifndef HELTEC_MESH_POCKET
+#if !defined(HELTEC_MESH_POCKET) && !defined(WIO_TRACKER_L1_EINK)
   ((MsgPreviewScreen *) msg_preview)->addPreview(path_len, from_name, text);
 #ifdef MORSE_COMPOSE_ENABLED
   // Don't switch away from MorseScreen — incoming messages are shown in its
@@ -1003,6 +1016,19 @@ void UITask::loop() {
   if (ev == BUTTON_EVENT_TRIPLE_CLICK) {
     c = handleTripleClick(KEY_SELECT);
   }
+#ifdef UI_JOYSTICK_COMPOSE
+  else if (ev == BUTTON_EVENT_CLICK) {
+    c = checkDisplayOn(KEY_CANCEL);
+  }
+  ev = joystick_up.check();
+  if (ev == BUTTON_EVENT_CLICK) {
+    c = checkDisplayOn(KEY_UP);
+  }
+  ev = joystick_down.check();
+  if (ev == BUTTON_EVENT_CLICK) {
+    c = checkDisplayOn(KEY_DOWN);
+  }
+#endif
 #elif defined(PIN_USER_BTN)
 #ifdef MORSE_COMPOSE_ENABLED
   // MorseScreen handles button timing directly via isPressed() in its poll().
@@ -1118,6 +1144,56 @@ void UITask::loop() {
 #endif
 
   if (curr) curr->poll();
+
+#ifdef UI_JOYSTICK_COMPOSE
+  if (curr == jc_picker) {
+    JCChannelPicker* picker = (JCChannelPicker*)jc_picker;
+    if (picker->isConfirmed()) {
+      picker->acknowledgeConfirm();
+      ((JCChannelScreen*)jc_channel)->activate(picker->getSelectedChannelIdx(),
+                                              picker->getSelectedChannelName());
+      setCurrScreen(jc_channel);
+    } else if (picker->wantsExit()) {
+      picker->acknowledgeExit();
+      gotoHomeScreen();
+    }
+  } else if (curr == jc_channel) {
+    JCChannelScreen* chs = (JCChannelScreen*)jc_channel;
+    if (chs->wantsCompose()) {
+      chs->acknowledgeCompose();
+      ((JCKeyboardScreen*)jc_keyboard)->activate(chs->getChannelIdx(), chs->getChannelName());
+      setCurrScreen(jc_keyboard);
+    } else if (chs->wantsExit()) {
+      chs->acknowledgeExit();
+      gotoHomeScreen();
+    }
+  } else if (curr == jc_keyboard) {
+    JCKeyboardScreen* kb = (JCKeyboardScreen*)jc_keyboard;
+    const char* sendText = nullptr;
+    if (kb->consumeSendRequest(&sendText) && sendText) {
+      uint8_t ch_idx = kb->getChannelIdx();
+      ChannelDetails ch;
+      if (the_mesh.getChannel(ch_idx, ch)) {
+        uint32_t ts = rtc_clock.getCurrentTime();
+        the_mesh.sendGroupMessage(ts, ch.channel,
+          the_mesh.getNodeName(), sendText, strlen(sendText));
+        char fullMsg[JC_TEXT_LEN];
+        snprintf(fullMsg, sizeof(fullMsg), "%s: %s", the_mesh.getNodeName(), sendText);
+        the_mesh.queueSentChannelMessage(ch_idx, ts, fullMsg);
+        jc_history.add(ch_idx, ts, fullMsg);
+        showAlert("Sent!", 800);
+      }
+      kb->clearOutBuf();
+      ((JCChannelScreen*)jc_channel)->resume();
+      setCurrScreen(jc_channel);
+    } else if (kb->wantsExit()) {
+      kb->acknowledgeExit();
+      kb->clearOutBuf();
+      ((JCChannelScreen*)jc_channel)->resume();
+      setCurrScreen(jc_channel);
+    }
+  }
+#endif
 
 #ifdef MORSE_COMPOSE_ENABLED
   // Channel picker → MorseScreen transition
@@ -1240,8 +1316,36 @@ char UITask::handleLongPress(char c) {
     the_mesh.enterCLIRescue();
     c = 0;   // consume event
   }
+#ifdef UI_JOYSTICK_COMPOSE
+  else if (c == KEY_ENTER && curr == home && ((HomeScreen*)home)->isFirstPage()) {
+    checkDisplayOn(c);
+    openChannelPicker();
+    c = 0;   // consume event
+  }
+#endif
   return c;
 }
+
+#ifdef UI_JOYSTICK_COMPOSE
+void UITask::openChannelPicker() {
+  JCChannelPicker* picker = (JCChannelPicker*)jc_picker;
+  picker->activate();
+  ChannelDetails ch;
+  for (uint8_t i = 0; i < MAX_GROUP_CHANNELS; i++) {
+    if (the_mesh.getChannel(i, ch) && ch.name[0] != 0) {
+      picker->addChannel(i, ch.name);
+    }
+  }
+  setCurrScreen(jc_picker);
+}
+
+void UITask::newChannelMsg(uint8_t channel_idx, const char* channel_name, const char* text) {
+  jc_history.add(channel_idx, rtc_clock.getCurrentTime(), text);
+  if (curr == jc_channel && _display != NULL && _display->isOn()) {
+    _next_refresh = 100;  // redraw so the new line appears
+  }
+}
+#endif
 
 char UITask::handleDoubleClick(char c) {
   MESH_DEBUG_PRINTLN("UITask: double-click triggered");

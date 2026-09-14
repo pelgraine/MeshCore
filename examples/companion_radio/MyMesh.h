@@ -196,7 +196,7 @@ protected:
 public:
   bool hasPendingWork() const;
 
-#ifdef MORSE_COMPOSE_ENABLED
+#if defined(MORSE_COMPOSE_ENABLED) || defined(UI_JOYSTICK_COMPOSE)
   void queueSentChannelMessage(uint8_t channel_idx, uint32_t timestamp, const char* text);
 #endif
 

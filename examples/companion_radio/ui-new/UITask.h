@@ -57,6 +57,12 @@ class UITask : public AbstractUITask {
   UIScreen* morse_screen;
   UIScreen* morse_channel_picker;
 #endif
+#ifdef UI_JOYSTICK_COMPOSE
+  UIScreen* jc_picker;
+  UIScreen* jc_channel;
+  UIScreen* jc_keyboard;
+  void openChannelPicker();
+#endif
   UIScreen* curr;
 
   void userLedHandler();
@@ -100,6 +106,9 @@ public:
   // from AbstractUITask
   void msgRead(int msgcount) override;
   void newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) override;
+#ifdef UI_JOYSTICK_COMPOSE
+  void newChannelMsg(uint8_t channel_idx, const char* channel_name, const char* text) override;
+#endif
   void notify(UIEventType t = UIEventType::none) override;
   void loop() override;
 

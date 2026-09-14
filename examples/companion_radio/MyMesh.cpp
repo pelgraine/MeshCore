@@ -736,6 +736,7 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
     channel_name = channel_details.name;
   }
   if (_ui) _ui->newMsg(path_len, channel_name, text, offline_queue_len);
+  if (_ui) _ui->newChannelMsg(channel_idx, channel_name, text);
 #endif
 }
 
@@ -2608,7 +2609,7 @@ bool MyMesh::hasPendingWork() const {
   return _mgr->getOutboundTotal() > 0 || dirty_contacts_expiry != 0;
 }
 
-#ifdef MORSE_COMPOSE_ENABLED
+#if defined(MORSE_COMPOSE_ENABLED) || defined(UI_JOYSTICK_COMPOSE)
 void MyMesh::queueSentChannelMessage(uint8_t channel_idx, uint32_t timestamp, const char* text) {
   int i = 0;
   if (app_target_ver >= 3) {

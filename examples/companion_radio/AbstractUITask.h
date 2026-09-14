@@ -41,6 +41,9 @@ public:
   void disableBluetooth() { _interfaceManager->disableBluetooth(); }
   virtual void msgRead(int msgcount) = 0;
   virtual void newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) = 0;
+  // Channel message with its channel index; default no-op so UI variants that
+  // don't keep an on-device channel history are unaffected.
+  virtual void newChannelMsg(uint8_t channel_idx, const char* channel_name, const char* text) {}
   virtual void notify(UIEventType t = UIEventType::none) = 0;
   virtual void loop() = 0;
 };

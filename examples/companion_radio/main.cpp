@@ -289,12 +289,12 @@ void setup() {
 
   board.onBootComplete();
 
-  // [DEBUG] Uncomment to check free heap / offline queue sizing:
-  // Serial.println("[HEAP] === After setup ===");
-  // dbgMemInfo();
-  // Serial.printf("[HEAP] OFFLINE_QUEUE_SIZE=%d, frame size=%d bytes, queue total=%d bytes\n",
-  //   OFFLINE_QUEUE_SIZE, (int)(1 + MAX_FRAME_SIZE),
-  //   OFFLINE_QUEUE_SIZE * (int)(1 + MAX_FRAME_SIZE));
+  // [DEBUG] Check free heap / offline queue sizing:
+  Serial.println("[HEAP] === After setup ===");
+  dbgMemInfo();
+  Serial.printf("[HEAP] OFFLINE_QUEUE_SIZE=%d, frame size=%d bytes, queue total=%d bytes\n",
+    OFFLINE_QUEUE_SIZE, (int)(1 + MAX_FRAME_SIZE),
+    OFFLINE_QUEUE_SIZE * (int)(1 + MAX_FRAME_SIZE));
 }
 
 void loop() {
