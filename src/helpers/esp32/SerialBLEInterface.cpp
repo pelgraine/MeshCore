@@ -38,6 +38,13 @@ void SerialBLEInterface::begin(const char* prefix, char* name, uint32_t pin_code
 
   //BLEDevice::setPower(ESP_PWR_LVL_N8);
 
+#ifdef ESP32_BLE_TX_POWER
+  // Value is an esp_power_level_t name (e.g. ESP_PWR_LVL_P21), not dBm.
+  // ADV covers advertising; DEFAULT covers connections (their per-connection power is never set).
+  BLEDevice::setPower(ESP32_BLE_TX_POWER, ESP_BLE_PWR_TYPE_ADV);
+  BLEDevice::setPower(ESP32_BLE_TX_POWER, ESP_BLE_PWR_TYPE_DEFAULT);
+#endif
+
   // Create the BLE Server
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(this);

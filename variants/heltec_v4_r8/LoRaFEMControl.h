@@ -21,5 +21,5 @@ public:
   LoRaFEMType getFEMType(void) const { return KCT8103L_PA; }
 
 private:
-  bool lna_enabled = false;
+  bool lna_enabled = true;
 };

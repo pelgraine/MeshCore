@@ -1104,6 +1104,10 @@ void MyMesh::begin() {
   radio_driver.setTxPower(_prefs.tx_power_dbm);
   radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain);
 
+#ifdef FORCE_FEM_LNA
+  // build-time LNA setting: replaces any saved fem_rxgain before the board reads it (1 = on, 0 = off)
+  _prefs.radio_fem_rxgain = FORCE_FEM_LNA ? 1 : 0;
+#endif
   board.attachDynamicPrefs(_prefs.getCustom());
 
   MESH_DEBUG_PRINTLN("RX Boosted Gain Mode: %s",

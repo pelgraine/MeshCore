@@ -916,7 +916,7 @@ void UITask::onMessageRecv(mesh::Packet *pkt, const ContactInfo &from, uint8_t t
   if (!(txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_SIGNED_PLAIN)) return;
 
   uint8_t path_len = pkt->isRouteFlood() ? pkt->path_len : 0xFF;
-#ifndef HELTEC_MESH_POCKET
+#if !defined(HELTEC_MESH_POCKET) && !defined(UI_NO_MSG_PREVIEW)  // opt-in: no unread-message screen; stay on home
   ((MsgPreviewScreen *) msg_preview)->addPreview(path_len, from.name, text);
 #ifdef MORSE_COMPOSE_ENABLED
   // Don't switch away from MorseScreen — incoming messages are shown in its
@@ -933,6 +933,7 @@ void UITask::onMessageRecv(mesh::Packet *pkt, const ContactInfo &from, uint8_t t
   }
 #endif
 
+#ifndef UI_NO_WAKE_ON_MSG  // opt-in: new messages neither turn the screen on nor keep it on; only the user button does
   if (_display != NULL) {
     if (!_display->isOn() && !hasConnection()) {
       _display->turnOn();
@@ -942,6 +943,7 @@ void UITask::onMessageRecv(mesh::Packet *pkt, const ContactInfo &from, uint8_t t
     _next_refresh = 100;  // trigger refresh
     }
   }
+#endif
 
   if (!hasConnection()) {
     notify(UIEventType::contactMessage);
@@ -950,9 +952,12 @@ void UITask::onMessageRecv(mesh::Packet *pkt, const ContactInfo &from, uint8_t t
 
 void UITask::onChannelMessageRecv(mesh::Packet *pkt, ChannelDetails& channel_details, const char* text) {
   uint8_t path_len = pkt->isRouteFlood() ? pkt->path_len : 0xFF;
+#ifndef UI_NO_MSG_PREVIEW  // opt-in: no unread-message screen; stay on home
   ((MsgPreviewScreen *) msg_preview)->addPreview(path_len, channel_details.name, text);
   setCurrScreen(msg_preview);
+#endif
 
+#ifndef UI_NO_WAKE_ON_MSG  // opt-in: new messages neither turn the screen on nor keep it on; only the user button does
   if (_display != NULL) {
     if (!_display->isOn() && !hasConnection()) {
       _display->turnOn();
@@ -962,6 +967,7 @@ void UITask::onChannelMessageRecv(mesh::Packet *pkt, ChannelDetails& channel_det
     _next_refresh = 100;  // trigger refresh
     }
   }
+#endif
 
   if (!hasConnection()) {
     notify(UIEventType::channelMessage);
