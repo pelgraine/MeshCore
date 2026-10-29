@@ -1,5 +1,8 @@
 #include "SerialBLEInterface.h"
 #include "esp_mac.h"
+#ifdef BLE_GARMIN
+#include "esp_gap_ble_api.h"
+#endif
 
 // See the following for generating UUIDs:
 // https://www.uuidgenerator.net/
@@ -9,6 +12,26 @@
 #define CHARACTERISTIC_UUID_TX "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
 
 #define ADVERT_RESTART_DELAY  1000   // millis
+
+#ifdef BLE_GARMIN
+// Slice tags for small-MTU peers. No real frame can start with one of these:
+// command codes are below 0x80 and push codes stop well short of 0xF0. When
+// slicing is in effect, every frame to or from the peer travels as
+// [tag][len][payload] slices.
+#define SLICE_TAG_FIRST   0xF0   // first slice of a multi-slice frame
+#define SLICE_TAG_MIDDLE  0xF1
+#define SLICE_TAG_LAST    0xF2
+#define SLICE_TAG_SINGLE  0xF3   // whole frame fits in one slice
+#define SLICE_TAG_MASK    0xFC   // (b & MASK) == SLICE_TAG_FIRST matches any tag
+#define SPLIT_MAX_MTU     23     // slice outgoing frames when the peer MTU is at or below this
+
+// Heart Rate sensor disguise (see the header).
+#define SENSOR_SVC_UUID        0x180D   // Heart Rate
+#define SENSOR_CHR_HRM_UUID    0x2A37   // Heart Rate Measurement (notify)
+#define SENSOR_CHR_LOC_UUID    0x2A38   // Body Sensor Location (read)
+#define SENSOR_APPEARANCE      0x0341   // Heart Rate Belt
+#define ADV_NAME_MAX_BYTES     18       // 31 - flags(3) - 16-bit svc(4) - appearance(4) - name header(2)
+#endif
 
 void SerialBLEInterface::begin(const char* prefix, char* name, uint32_t pin_code) {
   _pin_code = pin_code;
@@ -26,24 +49,24 @@ void SerialBLEInterface::begin(const char* prefix, char* name, uint32_t pin_code
   // Create the BLE Device
   BLEDevice::init(dev_name);
   BLEDevice::setSecurityCallbacks(this);
-  BLEDevice::setMTU(512);
-
-  // Prefer 2M PHY for all future connections (BLE 5.0 — doubles air data rate).
-  // If the peer doesn't support it, negotiation falls back to 1M PHY automatically.
-  esp_ble_gap_set_prefered_default_phy(ESP_BLE_GAP_PHY_2M_PREF_MASK, ESP_BLE_GAP_PHY_2M_PREF_MASK);
+  BLEDevice::setMTU(MAX_FRAME_SIZE);
 
   BLESecurity  sec;
   sec.setStaticPIN(pin_code);
+#ifdef BLE_GARMIN
+  // The watch can only reach an encrypted-but-unverified ("just works") link;
+  // drop the MITM requirement so that link is accepted. The static PIN above
+  // is then never asked for.
+  sec.setAuthenticationMode(ESP_LE_AUTH_REQ_SC_BOND);
+  const esp_gatt_perm_t permRead  = ESP_GATT_PERM_READ_ENCRYPTED;
+  const esp_gatt_perm_t permWrite = ESP_GATT_PERM_WRITE_ENCRYPTED;
+#else
   sec.setAuthenticationMode(ESP_LE_AUTH_REQ_SC_MITM_BOND);
+  const esp_gatt_perm_t permRead  = ESP_GATT_PERM_READ_ENC_MITM;
+  const esp_gatt_perm_t permWrite = ESP_GATT_PERM_WRITE_ENC_MITM;
+#endif
 
   //BLEDevice::setPower(ESP_PWR_LVL_N8);
-
-#ifdef ESP32_BLE_TX_POWER
-  // Value is an esp_power_level_t name (e.g. ESP_PWR_LVL_P21), not dBm.
-  // ADV covers advertising; DEFAULT covers connections (their per-connection power is never set).
-  BLEDevice::setPower(ESP32_BLE_TX_POWER, ESP_BLE_PWR_TYPE_ADV);
-  BLEDevice::setPower(ESP32_BLE_TX_POWER, ESP_BLE_PWR_TYPE_DEFAULT);
-#endif
 
   // Create the BLE Server
   pServer = BLEDevice::createServer();
@@ -54,14 +77,54 @@ void SerialBLEInterface::begin(const char* prefix, char* name, uint32_t pin_code
 
   // Create a BLE Characteristic
   pTxCharacteristic = pService->createCharacteristic(CHARACTERISTIC_UUID_TX, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-  pTxCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM);
+  pTxCharacteristic->setAccessPermissions(permRead);
   pTxCharacteristic->addDescriptor(new BLE2902());
 
   BLECharacteristic * pRxCharacteristic = pService->createCharacteristic(CHARACTERISTIC_UUID_RX, BLECharacteristic::PROPERTY_WRITE);
-  pRxCharacteristic->setAccessPermissions(ESP_GATT_PERM_WRITE_ENC_MITM);
+  pRxCharacteristic->setAccessPermissions(permWrite);
   pRxCharacteristic->setCallbacks(this);
 
+#ifdef BLE_GARMIN
+  // Heart Rate service: notify-only measurement plus body sensor location,
+  // with the same link requirement as the UART characteristics, so the
+  // watch's sensor menu has to pair before it can subscribe.
+  pSensorService = pServer->createService(BLEUUID((uint16_t)SENSOR_SVC_UUID));
+  BLECharacteristic* pHrm = pSensorService->createCharacteristic(BLEUUID((uint16_t)SENSOR_CHR_HRM_UUID), BLECharacteristic::PROPERTY_NOTIFY);
+  pHrm->setAccessPermissions(permRead);
+  BLE2902* pHrmCccd = new BLE2902();
+  pHrmCccd->setAccessPermissions(permRead | permWrite);
+  pHrm->addDescriptor(pHrmCccd);
+  uint8_t hrmInit[2] = { 0x00, 0x00 };   // flags byte + 8-bit value 0
+  pHrm->setValue(hrmInit, 2);
+  BLECharacteristic* pLoc = pSensorService->createCharacteristic(BLEUUID((uint16_t)SENSOR_CHR_LOC_UUID), BLECharacteristic::PROPERTY_READ);
+  pLoc->setAccessPermissions(permRead);
+  uint8_t locChest = 1;
+  pLoc->setValue(&locChest, 1);
+
+  // Advertising packet: flags, 16-bit Heart Rate UUID, appearance, name
+  // (shortened to ADV_NAME_MAX_BYTES at a UTF-8 character boundary if
+  // needed). Scan response: the 128-bit UART UUID, so phone apps that filter
+  // on it still find the node.
+  BLEAdvertisementData adv;
+  adv.setFlags(ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT);
+  adv.setCompleteServices(BLEUUID((uint16_t)SENSOR_SVC_UUID));
+  adv.setAppearance(SENSOR_APPEARANCE);
+  size_t nameLen = strlen(dev_name);
+  if (nameLen <= ADV_NAME_MAX_BYTES) {
+    adv.setName(std::string(dev_name, nameLen));
+  } else {
+    size_t cut = ADV_NAME_MAX_BYTES;
+    while (cut > 0 && (((uint8_t)dev_name[cut]) & 0xC0) == 0x80) cut--;   // do not split a UTF-8 sequence
+    adv.setShortName(std::string(dev_name, cut));
+  }
+  BLEAdvertisementData rsp;
+  rsp.setCompleteServices(BLEUUID(SERVICE_UUID));
+  pServer->getAdvertising()->setAdvertisementData(adv);
+  pServer->getAdvertising()->setScanResponseData(rsp);
+  BLE_DEBUG_PRINTLN("Garmin: HR service advertised, UART in scan response, name bytes=%u", (unsigned)nameLen);
+#else
   pServer->getAdvertising()->addServiceUUID(SERVICE_UUID);
+#endif
 }
 
 // -------- BLESecurityCallbacks methods
@@ -106,23 +169,6 @@ void SerialBLEInterface::onConnect(BLEServer* pServer) {
 void SerialBLEInterface::onConnect(BLEServer* pServer, esp_ble_gatts_cb_param_t *param) {
   BLE_DEBUG_PRINTLN("onConnect(), conn_id=%d, mtu=%d", param->connect.conn_id, pServer->getPeerMTU(param->connect.conn_id));
   last_conn_id = param->connect.conn_id;
-
-  // Schedule a connection parameter update to be applied from the main loop.
-  // IMPORTANT: esp_ble_gap_update_conn_params() must NOT be called directly here
-  // because this callback runs inside the Bluedroid BT task. Calling BLE API
-  // functions re-entrantly from within BLE task callbacks deadlocks the internal
-  // Bluedroid queue, causing ~10s freezes. We defer to checkRecvFrame() instead.
-  memcpy(_pending_conn_bda, param->connect.remote_bda, sizeof(esp_bd_addr_t));
-  // MTU exchange takes 1-2 connection events on the default connect interval (~30-50ms).
-  // 100ms is ample time for it to finish before we request tighter conn params.
-  _conn_params_update_time = millis() + 100;
-  // PHY update fires 300ms after conn params — enough time for the central to accept/reject
-  // the conn param negotiation (1-2 events at the new 15ms interval = ~30ms) before
-  // we issue a second LL procedure. The two must never overlap or the stack freezes.
-  _phy_update_time = millis() + 400;
-  // Start in fast mode; MyMesh will call setFastMode(false) when sync is done.
-  _fast_mode = true;
-  _mode_change_time = 0;
 }
 
 void SerialBLEInterface::onMtuChanged(BLEServer* pServer, esp_ble_gatts_cb_param_t* param) {
@@ -143,6 +189,29 @@ void SerialBLEInterface::onWrite(BLECharacteristic* pCharacteristic, esp_ble_gat
   uint8_t* rxValue = pCharacteristic->getData();
   int len = pCharacteristic->getLength();
 
+#ifdef BLE_GARMIN
+  if (len >= 1 && (rxValue[0] & SLICE_TAG_MASK) == SLICE_TAG_FIRST) {   // any SLICE_TAG_*
+    uint8_t tag = rxValue[0];
+    if (tag == SLICE_TAG_FIRST || tag == SLICE_TAG_SINGLE) _rx_len = 0;
+    if (_rx_len < 0) return;                                  // middle/last with no start: drop
+    if (len < 2) return;                                      // no length byte
+    int n = rxValue[1];
+    if (n > len - 2) n = len - 2;                             // never read past the write
+    if (_rx_len + n > MAX_FRAME_SIZE) { _rx_len = -1; return; }   // oversize: drop the frame
+    memcpy(&_rx_buf[_rx_len], rxValue + 2, n);
+    _rx_len += n;
+    if (tag == SLICE_TAG_LAST || tag == SLICE_TAG_SINGLE) {
+      Frame frame = {};
+      frame.len = _rx_len;
+      memcpy(frame.buf, _rx_buf, _rx_len);
+      if (xQueueSend(recv_queue, &frame, 0) != pdTRUE) {
+        BLE_DEBUG_PRINTLN("ERROR: onWrite(), recv_queue is full! (sliced)");
+      }
+      _rx_len = -1;
+    }
+    return;
+  }
+#endif
   if (len > MAX_FRAME_SIZE) {
     BLE_DEBUG_PRINTLN("ERROR: onWrite(), frame too big, len=%d", len);
   } else {
@@ -161,9 +230,12 @@ void SerialBLEInterface::onWrite(BLECharacteristic* pCharacteristic, esp_ble_gat
 void SerialBLEInterface::clearBuffers() {
   xQueueReset(recv_queue);
   send_queue_len = 0;
+#ifdef BLE_GARMIN
+  _tx_off = 0; _rx_len = -1;
+#endif
 }
 
-void SerialBLEInterface::enable() { 
+void SerialBLEInterface::enable() {
   if (_isEnabled) return;
 
   _isEnabled = true;
@@ -171,6 +243,9 @@ void SerialBLEInterface::enable() {
 
   // Start the service
   pService->start();
+#ifdef BLE_GARMIN
+  pSensorService->start();
+#endif
 
   // Start advertising
 
@@ -189,6 +264,9 @@ void SerialBLEInterface::disable() {
   pServer->getAdvertising()->stop();
   pServer->disconnect(last_conn_id);
   pService->stop();
+#ifdef BLE_GARMIN
+  pSensorService->stop();
+#endif
   oldDeviceConnected = deviceConnected = false;
   adv_restart_time = 0;
 }
@@ -214,84 +292,64 @@ size_t SerialBLEInterface::writeFrame(const uint8_t src[], size_t len) {
   return 0;
 }
 
-#define  BLE_WRITE_MIN_INTERVAL   8   // millis between BLE notifications (faster than 15ms max so we don't skip events)
-
-void SerialBLEInterface::setFastMode(bool fast) {
-  if (fast == _fast_mode && _mode_change_time == 0) return;  // already in the right mode, nothing pending
-  _fast_mode = fast;
-  if (fast) {
-    // Switch to fast params quickly (20ms) so sync starts at full speed.
-    // Guard: don't clobber a still-pending initial conn params update.
-    if (_conn_params_update_time == 0 && _phy_update_time == 0) {
-      _mode_change_time = millis() + 20;
-    } else {
-      _mode_change_time = 0;  // initial setup handles it
-    }
-  } else {
-    // 2s cooldown before dialing back — lets any in-flight frames clear and
-    // avoids rapid oscillation if the app re-requests contacts immediately.
-    _mode_change_time = millis() + 2000;
-  }
-}
+#define  BLE_WRITE_MIN_INTERVAL   60
 
 bool SerialBLEInterface::isWriteBusy() const {
-  return millis() < _last_write + BLE_WRITE_MIN_INTERVAL;  // don't push data faster than BLE can send it
+  return millis() < _last_write + BLE_WRITE_MIN_INTERVAL;   // still too soon to start another write?
 }
 
 size_t SerialBLEInterface::checkRecvFrame(uint8_t dest[]) {
-  // Apply deferred connection parameter update from safe main-loop context.
-  if (_conn_params_update_time && millis() >= _conn_params_update_time) {
-    _conn_params_update_time = 0;
-    esp_ble_conn_update_params_t conn_params = {};
-    memcpy(conn_params.bda, _pending_conn_bda, sizeof(esp_bd_addr_t));
-    conn_params.min_int = 0x06;    // 7.5ms (units of 1.25ms) — BLE spec minimum; Android honours this
-    conn_params.max_int = 0x0C;    // 15ms — iOS foreground floor; stack picks lowest it will accept
-    conn_params.latency = 0;
-    conn_params.timeout = 0x01F0;  // 4s supervision timeout
-    esp_ble_gap_update_conn_params(&conn_params);
-  }
-
-  // Apply deferred 2M PHY upgrade — kept separate so it never races the conn params update.
-  // The two LL procedures running back-to-back caused multi-second freezes.
-  if (_phy_update_time && millis() >= _phy_update_time) {
-    _phy_update_time = 0;
-    esp_ble_gap_set_prefered_phy(_pending_conn_bda, 0,
-      ESP_BLE_GAP_PHY_2M_PREF_MASK, ESP_BLE_GAP_PHY_2M_PREF_MASK,
-      ESP_BLE_GAP_PHY_OPTIONS_NO_PREF);
-  }
-
-  // Dynamic mode switch requested by upper layer (setFastMode).
-  // Guard: only fire when no other LL procedure is in flight.
-  if (_mode_change_time && millis() >= _mode_change_time
-      && _conn_params_update_time == 0 && _phy_update_time == 0) {
-    _mode_change_time = 0;
-    esp_ble_conn_update_params_t conn_params = {};
-    memcpy(conn_params.bda, _pending_conn_bda, sizeof(esp_bd_addr_t));
-    if (_fast_mode) {
-      conn_params.min_int = 0x06;  // 7.5ms — full speed for contact/channel streaming
-      conn_params.max_int = 0x0C;  // 15ms
-    } else {
-      conn_params.min_int = 0x24;  // 45ms — responsive idle; keeps push message latency low
-      conn_params.max_int = 0x48;  // 90ms — power-friendly without perceivable lag
-    }
-    conn_params.latency = 0;
-    conn_params.timeout = 0x01F0;  // ~5s supervision timeout (must be > 2 × max_interval = 180ms)
-    esp_ble_gap_update_conn_params(&conn_params);
-  }
-
-  if (send_queue_len > 0
-    && millis() >= _last_write + BLE_WRITE_MIN_INTERVAL
+  if (send_queue_len > 0   // first, check send queue
+    && millis() >= _last_write + BLE_WRITE_MIN_INTERVAL    // space the writes apart
   ) {
     _last_write = millis();
+#ifdef BLE_GARMIN
+    bool popFrame = true;
+    uint16_t mtu = pServer->getPeerMTU(last_conn_id);
+    if (mtu <= SPLIT_MAX_MTU) {
+      // Small-MTU peer: send the next slice of the frame at the head of the
+      // queue, one slice per pass (keeps BLE_WRITE_MIN_INTERVAL pacing). The
+      // frame is only popped once its last slice has gone.
+      int room = (int)mtu - 3 - 2;                 // ATT payload minus tag and length bytes
+      if (room < 1) room = 1;
+      int total = send_queue[0].len;
+      int n = total - _tx_off;
+      if (n > room) n = room;
+      bool first = (_tx_off == 0);
+      bool last  = (_tx_off + n >= total);
+      uint8_t chunk[MAX_FRAME_SIZE + 2];
+      chunk[0] = (first && last) ? SLICE_TAG_SINGLE
+               : first ? SLICE_TAG_FIRST
+               : last  ? SLICE_TAG_LAST : SLICE_TAG_MIDDLE;
+      chunk[1] = (uint8_t)n;
+      memcpy(&chunk[2], &send_queue[0].buf[_tx_off], n);
+      pTxCharacteristic->setValue(chunk, n + 2);
+      pTxCharacteristic->notify();
+      BLE_DEBUG_PRINTLN("writeSlice: tag=%02X off=%d n=%d of %d", chunk[0], (int)_tx_off, n, total);
+      _tx_off += n;
+      if (last) {
+        _tx_off = 0;
+        BLE_DEBUG_PRINTLN("writeBytes: sz=%d, hdr=%d (sliced)", total, (uint32_t) send_queue[0].buf[0]);
+      } else {
+        popFrame = false;
+      }
+    } else {
+#endif
     pTxCharacteristic->setValue(send_queue[0].buf, send_queue[0].len);
     pTxCharacteristic->notify();
 
     BLE_DEBUG_PRINTLN("writeBytes: sz=%d, hdr=%d", (uint32_t)send_queue[0].len, (uint32_t) send_queue[0].buf[0]);
-
+#ifdef BLE_GARMIN
+    }
+    if (popFrame) {
+#endif
     send_queue_len--;
     for (int i = 0; i < send_queue_len; i++) {   // delete top item from queue
       send_queue[i] = send_queue[i + 1];
     }
+#ifdef BLE_GARMIN
+    }
+#endif
   }
 
   Frame frame;
