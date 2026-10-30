@@ -103,6 +103,16 @@
 #define RESP_CODE_DEFAULT_FLOOD_SCOPE 28
 #define RESP_CODE_CLI_REPLY           29  // v14+, a reply to CMD_RUN_CLI_COMMAND
 
+#ifdef BLE_GARMIN
+// Garmin watch app (Meck-Garmin): favourites list and contact-name lookup, so the
+// watch's Favourites and repeater-admin screens work on this node. Same codes and
+// layouts as Meck's MECK_WATCH_EXT commands, so the watch uses one code path.
+#define CMD_WATCH_GET_FAV             0x76  // [n] -> RESP_CODE_WATCH_FAV (n-th favourite contact)
+#define CMD_WATCH_RESOLVE             0x77  // [plen][pubkey prefix] -> RESP_CODE_WATCH_RESOLVE
+#define RESP_CODE_WATCH_FAV           0x66  // [n][count] then, if n < count: [type][last_advert:4][pubkey:32][name]
+#define RESP_CODE_WATCH_RESOLVE       0x67  // [plen][prefix][name] (no name = not found)
+#endif
+
 #define MAX_CHANNEL_DATA_LENGTH       (MAX_FRAME_SIZE - 9)
 
 #define SEND_TIMEOUT_BASE_MILLIS        500
@@ -2056,6 +2066,61 @@ void MyMesh::handleCmdFrame(size_t len) {
     } else {
       writeErrFrame(ERR_CODE_TABLE_FULL);
     }
+#ifdef BLE_GARMIN
+  } else if (cmd_frame[0] == CMD_WATCH_GET_FAV && len >= 2) {
+    // n-th contact with the favourite bit, in contact order. Walks the contacts
+    // with the standard iterator (as CMD_GET_CONTACTS does), which skips the
+    // reserved anon slots at the start of the table.
+    uint8_t n = cmd_frame[1];
+    int count = 0;
+    bool found = false;
+    ContactInfo hit;
+    ContactInfo c;
+    ContactsIterator it = startContactsIterator();
+    while (it.hasNext(this, c)) {
+      if (c.isFav()) {
+        if (count == n) { hit = c; found = true; }
+        count++;
+      }
+    }
+    if (count > 255) count = 255;
+    int i = 0;
+    out_frame[i++] = RESP_CODE_WATCH_FAV;
+    out_frame[i++] = n;
+    out_frame[i++] = (uint8_t)count;
+    if (found) {
+      out_frame[i++] = hit.type;
+      memcpy(&out_frame[i], &hit.last_advert_timestamp, 4);
+      i += 4;
+      memcpy(&out_frame[i], hit.id.pub_key, PUB_KEY_SIZE);
+      i += PUB_KEY_SIZE;
+      int tlen = strnlen(hit.name, sizeof(hit.name));
+      if (i + tlen > MAX_FRAME_SIZE) tlen = MAX_FRAME_SIZE - i;
+      memcpy(&out_frame[i], hit.name, tlen);
+      i += tlen;
+    }
+    _serial->writeFrame(out_frame, i);
+  } else if (cmd_frame[0] == CMD_WATCH_RESOLVE && len >= 3) {
+    // contact name for a public-key prefix (neighbour lists show names)
+    uint8_t plen = cmd_frame[1];
+    if (plen < 1 || plen > PUB_KEY_SIZE || len < 2 + plen) {
+      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+    } else {
+      ContactInfo* found = lookupContactByPubKey(&cmd_frame[2], plen);
+      int i = 0;
+      out_frame[i++] = RESP_CODE_WATCH_RESOLVE;
+      out_frame[i++] = plen;
+      memcpy(&out_frame[i], &cmd_frame[2], plen);
+      i += plen;
+      if (found != NULL && found->name[0] != '\0') {
+        int tlen = strnlen(found->name, sizeof(found->name));
+        if (i + tlen > MAX_FRAME_SIZE) tlen = MAX_FRAME_SIZE - i;
+        memcpy(&out_frame[i], found->name, tlen);
+        i += tlen;
+      }
+      _serial->writeFrame(out_frame, i);
+    }
+#endif
   } else {
     writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);
     MESH_DEBUG_PRINTLN("ERROR: unknown command: %02X", cmd_frame[0]);
