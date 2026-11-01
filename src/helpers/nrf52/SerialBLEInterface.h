@@ -7,9 +7,30 @@
 #define BLE_TX_POWER 4
 #endif
 
+// BLE_GARMIN (build flag): make the node usable from a Garmin Connect IQ watch.
+//   1. Just-works pairing: the watch cannot enter a PIN, so the UART
+//      characteristics require an encrypted but unauthenticated link. The
+//      static PIN is not set up at all (Bluefruit's setPIN() forces MITM on).
+//   2. Small-MTU slicing: the watch never raises the ATT MTU above 23, so
+//      frames travel as tagged 20-byte slices in both directions.
+//   3. Sensor advertising: the watch's own Connect IQ app never starts pairing
+//      with an unknown node, but its Sensors & Accessories menu does. The node
+//      also advertises as a heart-rate sensor so that menu lists it; the bond
+//      made there is then used by the watch app. No heart-rate data is sent.
+// nRF52 port of the ESP32 BLE_GARMIN transport (pelgraine/MeshCore, garmin
+// branch). The DFU service keeps its MITM permissions and is not changed.
+
 class SerialBLEInterface : public BaseSerialInterface {
   BLEDfu bledfu;
   BLEUart bleuart;
+#ifdef BLE_GARMIN
+  BLEService        hrmSvc;          // Heart Rate service (sensor disguise)
+  BLECharacteristic hrmChr;          // Heart Rate Measurement (notify)
+  BLECharacteristic bslChr;          // Body Sensor Location (read)
+  uint16_t _tx_off;                  // bytes of send_queue[0] already sent as slices (0 = none yet)
+  uint8_t  _rx_buf[MAX_FRAME_SIZE];  // reassembly buffer for sliced writes
+  int      _rx_len;                  // bytes collected so far (-1 = not mid-frame)
+#endif
   bool _isEnabled;
   bool _isDeviceConnected;
   uint16_t _conn_handle;
@@ -43,7 +64,15 @@ class SerialBLEInterface : public BaseSerialInterface {
   static void onBleUartRX(uint16_t conn_handle);
 
 public:
+#ifdef BLE_GARMIN
+  SerialBLEInterface()
+    : hrmSvc(UUID16_SVC_HEART_RATE),
+      hrmChr(UUID16_CHR_HEART_RATE_MEASUREMENT),
+      bslChr(UUID16_CHR_BODY_SENSOR_LOCATION) {
+    _tx_off = 0; _rx_len = -1;
+#else
   SerialBLEInterface() {
+#endif
     _isEnabled = false;
     _isDeviceConnected = false;
     _conn_handle = BLE_CONN_HANDLE_INVALID;
