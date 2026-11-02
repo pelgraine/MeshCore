@@ -22,6 +22,22 @@
 // RX drain buffer size for overflow protection
 #define BLE_RX_DRAIN_BUF_SIZE      32
 
+#ifdef BLE_GARMIN
+// Slice tags for small-MTU peers. No real frame can start with one of these:
+// command codes are below 0x80 and push codes stop well short of 0xF0. When
+// slicing is in effect, every frame to or from the peer travels as
+// [tag][len][payload] slices. Same scheme as the ESP32 transport.
+#define SLICE_TAG_FIRST   0xF0   // first slice of a multi-slice frame
+#define SLICE_TAG_MIDDLE  0xF1
+#define SLICE_TAG_LAST    0xF2
+#define SLICE_TAG_SINGLE  0xF3   // whole frame fits in one slice
+#define SLICE_TAG_MASK    0xFC   // (b & MASK) == SLICE_TAG_FIRST matches any tag
+#define SPLIT_MAX_MTU     23     // slice outgoing frames when the peer MTU is at or below this
+
+// Heart Rate sensor disguise (see the header).
+#define SENSOR_APPEARANCE      0x0341   // Heart Rate Belt
+#endif
+
 static SerialBLEInterface* instance = nullptr;
 
 void SerialBLEInterface::onConnect(uint16_t connection_handle) {
@@ -169,9 +185,20 @@ void SerialBLEInterface::begin(const char* prefix, char* name, uint32_t pin_code
   Bluefruit.setTxPower(BLE_TX_POWER);
   Bluefruit.setName(dev_name);
 
+#ifdef BLE_GARMIN
+  // The watch can only reach an encrypted-but-unverified ("just works") link;
+  // drop the MITM requirement so that link is accepted. setPIN() is not
+  // called: it forces MITM on, legacy pairing and a display-only IO
+  // capability as side effects. No PIN is ever asked for.
+  Bluefruit.Security.setMITM(false);
+  Bluefruit.Security.setIOCaps(false, false, false);
+  const SecureMode_t permUart = SECMODE_ENC_NO_MITM;
+#else
   Bluefruit.Security.setMITM(true);
   Bluefruit.Security.setPIN(charpin);
   Bluefruit.Security.setIOCaps(true, false, false);
+  const SecureMode_t permUart = SECMODE_ENC_WITH_MITM;
+#endif
   Bluefruit.Security.setPairPasskeyCallback(onPairingPasskey);
   Bluefruit.Security.setPairCompleteCallback(onPairingComplete);
 
@@ -181,7 +208,7 @@ void SerialBLEInterface::begin(const char* prefix, char* name, uint32_t pin_code
 
   Bluefruit.setEventCallback(onBLEEvent);
 
-  bleuart.setPermission(SECMODE_ENC_WITH_MITM, SECMODE_ENC_WITH_MITM);
+  bleuart.setPermission(permUart, permUart);
   bleuart.begin();
   bleuart.setRxCallback(onBleUartRX);
 
@@ -192,11 +219,42 @@ void SerialBLEInterface::begin(const char* prefix, char* name, uint32_t pin_code
   bledfu.setPermission(SECMODE_ENC_WITH_MITM, SECMODE_ENC_WITH_MITM);
   bledfu.begin();
 
+#ifdef BLE_GARMIN
+  // Heart Rate service: notify-only measurement plus body sensor location,
+  // with the same link requirement as the UART characteristics, so the
+  // watch's sensor menu has to pair before it can subscribe. (Bluefruit gives
+  // the CCCD the characteristic's read permission.)
+  hrmSvc.begin();
+  hrmChr.setProperties(CHR_PROPS_NOTIFY);
+  hrmChr.setPermission(permUart, SECMODE_NO_ACCESS);
+  hrmChr.setFixedLen(2);
+  hrmChr.begin();
+  uint8_t hrmInit[2] = { 0x00, 0x00 };   // flags byte + 8-bit value 0
+  hrmChr.write(hrmInit, 2);
+  bslChr.setProperties(CHR_PROPS_READ);
+  bslChr.setPermission(permUart, SECMODE_NO_ACCESS);
+  bslChr.setFixedLen(1);
+  bslChr.begin();
+  bslChr.write8(1);   // chest
+
+  // Advertising packet: flags, TX power, 16-bit Heart Rate UUID, appearance,
+  // name (Bluefruit shortens it to fit). Scan response: the 128-bit UART
+  // UUID, so phone apps that filter on it still find the node.
+  Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
+  Bluefruit.Advertising.addTxPower();
+  Bluefruit.Advertising.addService(hrmSvc);
+  Bluefruit.Advertising.addAppearance(SENSOR_APPEARANCE);
+  bool fullName = Bluefruit.Advertising.addName();
+  (void)fullName;   // only used by the debug line below
+  Bluefruit.ScanResponse.addService(bleuart);
+  BLE_DEBUG_PRINTLN("Garmin: HR service advertised, UART in scan response, name %s", fullName ? "complete" : "shortened");
+#else
   Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
   Bluefruit.Advertising.addTxPower();
   Bluefruit.Advertising.addService(bleuart);
 
   Bluefruit.ScanResponse.addName();
+#endif
 
   Bluefruit.Advertising.setInterval(BLE_ADV_INTERVAL_MIN, BLE_ADV_INTERVAL_MAX);
   Bluefruit.Advertising.setFastTimeout(BLE_ADV_FAST_TIMEOUT);
@@ -209,6 +267,9 @@ void SerialBLEInterface::clearBuffers() {
   send_queue_len = 0;
   recv_queue_len = 0;
   _last_retry_attempt = 0;
+#ifdef BLE_GARMIN
+  _tx_off = 0; _rx_len = -1;
+#endif
   bleuart.flush();
 }
 
@@ -309,6 +370,49 @@ size_t SerialBLEInterface::checkRecvFrame(uint8_t dest[]) {
       bool throttle_active = (_last_retry_attempt > 0 && (now - _last_retry_attempt) < BLE_RETRY_THROTTLE_MS);
 
       if (!throttle_active) {
+#ifdef BLE_GARMIN
+        BLEConnection* conn = Bluefruit.Connection(_conn_handle);
+        uint16_t mtu = conn ? conn->getMtu() : 23;
+        if (mtu <= SPLIT_MAX_MTU) {
+          // Small-MTU peer: send the next slice of the frame at the head of the
+          // queue, one slice per pass. Bluefruit's own notify would split a long
+          // frame into bare MTU-sized pieces the watch cannot tell apart, so the
+          // frame is cut here with tags instead. It is only popped once its
+          // last slice has gone.
+          int room = (int)mtu - 3 - 2;                 // ATT payload minus tag and length bytes
+          if (room < 1) room = 1;
+          int total = send_queue[0].len;
+          int n = total - _tx_off;
+          if (n > room) n = room;
+          bool first = (_tx_off == 0);
+          bool last  = (_tx_off + n >= total);
+          uint8_t chunk[MAX_FRAME_SIZE + 2];
+          chunk[0] = (first && last) ? SLICE_TAG_SINGLE
+                   : first ? SLICE_TAG_FIRST
+                   : last  ? SLICE_TAG_LAST : SLICE_TAG_MIDDLE;
+          chunk[1] = (uint8_t)n;
+          memcpy(&chunk[2], &send_queue[0].buf[_tx_off], n);
+          size_t written = bleuart.write(chunk, n + 2);
+          if (written == (size_t)(n + 2)) {
+            BLE_DEBUG_PRINTLN("writeSlice: tag=%02X off=%d n=%d of %d", chunk[0], (int)_tx_off, n, total);
+            _last_retry_attempt = 0;
+            _tx_off += n;
+            if (last) {
+              BLE_DEBUG_PRINTLN("writeBytes: sz=%d, hdr=%u (sliced)", total, (unsigned)send_queue[0].buf[0]);
+              _tx_off = 0;
+              shiftSendQueueLeft();
+            }
+          } else if (!isConnected()) {
+            BLE_DEBUG_PRINTLN("writeSlice failed: connection lost, dropping frame");
+            _last_retry_attempt = 0;
+            _tx_off = 0;
+            shiftSendQueueLeft();
+          } else {
+            BLE_DEBUG_PRINTLN("writeSlice failed (buffer full), keeping frame for retry");
+            _last_retry_attempt = now;
+          }
+        } else {
+#endif
         Frame frame_to_send = send_queue[0];
 
         size_t written = bleuart.write(frame_to_send.buf, frame_to_send.len);
@@ -330,10 +434,13 @@ size_t SerialBLEInterface::checkRecvFrame(uint8_t dest[]) {
             _last_retry_attempt = now;
           }
         }
+#ifdef BLE_GARMIN
+        }
+#endif
       }
     }
   }
-  
+
   if (recv_queue_len > 0) {
     size_t len = recv_queue[0].len;
     memcpy(dest, recv_queue[0].buf, len);
@@ -372,7 +479,40 @@ void SerialBLEInterface::onBleUartRX(uint16_t conn_handle) {
     }
     return;
   }
-  
+
+#ifdef BLE_GARMIN
+  // Sliced writes from a small-MTU peer. Each write lands in the UART RX
+  // buffer whole, so the buffer holds complete [tag][len][payload] slices,
+  // possibly several. Consume them here; anything else falls through to the
+  // normal one-write-one-frame path below.
+  while (instance->bleuart.available() >= 2 && (instance->bleuart.peek() & SLICE_TAG_MASK) == SLICE_TAG_FIRST) {   // any SLICE_TAG_*
+    uint8_t tag = (uint8_t)instance->bleuart.read();
+    int n = instance->bleuart.read();
+    if (tag == SLICE_TAG_FIRST || tag == SLICE_TAG_SINGLE) instance->_rx_len = 0;
+    int avail = instance->bleuart.available();
+    if (n > avail) n = avail;                                   // never read past what has arrived
+    if (instance->_rx_len < 0 || instance->_rx_len + n > MAX_FRAME_SIZE) {
+      // middle/last with no start, or oversize: drop this slice's payload and the frame
+      for (int i = 0; i < n; i++) instance->bleuart.read();
+      instance->_rx_len = -1;
+      continue;
+    }
+    for (int i = 0; i < n; i++) {
+      instance->_rx_buf[instance->_rx_len++] = (uint8_t)instance->bleuart.read();
+    }
+    if (tag == SLICE_TAG_LAST || tag == SLICE_TAG_SINGLE) {
+      if (instance->recv_queue_len < FRAME_QUEUE_SIZE) {
+        instance->recv_queue[instance->recv_queue_len].len = instance->_rx_len;
+        memcpy(instance->recv_queue[instance->recv_queue_len].buf, instance->_rx_buf, instance->_rx_len);
+        instance->recv_queue_len++;
+      } else {
+        BLE_DEBUG_PRINTLN("onBleUartRX: recv queue full, dropping sliced frame");
+      }
+      instance->_rx_len = -1;
+    }
+  }
+#endif
+
   while (instance->bleuart.available() > 0) {
     if (instance->recv_queue_len >= FRAME_QUEUE_SIZE) {
       while (instance->bleuart.available() > 0) {
