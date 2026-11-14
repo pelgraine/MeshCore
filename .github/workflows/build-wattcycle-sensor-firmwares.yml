@@ -1,0 +1,64 @@
+name: Build Wattcycle Sensor Firmwares
+
+# Builds every PlatformIO env with "wattcycle_sensor" in its name, and uploads
+# the plain and merged .bin files for each one as a workflow artifact.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - wattcycle-bms-sensor
+
+jobs:
+
+  generate-build-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.get-build-targets.outputs.targets }}
+    steps:
+
+      - name: Clone Repo
+        uses: actions/checkout@v6
+
+      - name: Setup Build Environment
+        uses: ./.github/actions/setup-build-environment
+
+      - name: Get Build Targets
+        id: get-build-targets
+        run: |
+          # every env name containing "wattcycle_sensor" (case insensitive)
+          TARGET_LIST=$(/usr/bin/env bash build.sh list | grep -i 'wattcycle_sensor' || true)
+
+          # convert targets separated by new line into a json array string
+          JSON_ARRAY=$(echo "$TARGET_LIST" | jq -R -s -c 'split("\n") | map(select(length > 0))')
+
+          echo "targets=$JSON_ARRAY" >> $GITHUB_OUTPUT
+
+  build:
+    needs: generate-build-matrix
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: ${{ fromJson(needs.generate-build-matrix.outputs.targets) }}
+      fail-fast: false # don't cancel the other boards if one fails
+    steps:
+
+      - name: Clone Repo
+        uses: actions/checkout@v6
+
+      - name: Setup Build Environment
+        uses: ./.github/actions/setup-build-environment
+
+      # build.sh builds the env, runs the 'mergebin' target, and copies
+      # firmware.bin and firmware-merged.bin into ./out
+      - name: Build Firmware
+        env:
+          FIRMWARE_VERSION: ${{ env.GIT_TAG_VERSION }}
+        run: /usr/bin/env bash build.sh build-firmware ${{ matrix.target }}
+
+      - name: Upload Workflow Artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: "${{ matrix.target }}"
+          path: out
+          if-no-files-found: error
