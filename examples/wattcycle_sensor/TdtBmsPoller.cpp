@@ -17,6 +17,14 @@
 #ifndef BMS_TASK_STACK
   #define BMS_TASK_STACK             8192
 #endif
+#ifndef BMS_BLE_TX_POWER
+  #define BMS_BLE_TX_POWER           ESP_PWR_LVL_P21   // highest level in the core's esp_bt.h (+21 dBm); default is +3 dBm
+#endif
+
+// esp_power_level_t index to dBm (N24 = 0 = -24 dBm, 3 dB per step)
+static int bleLevelToDbm(int level) {
+  return -24 + 3 * level;
+}
 
 static const char BMS_UNLOCK[] = "HiLink";   // written to 0xFFFA to unlock the BMS
 
@@ -79,6 +87,14 @@ void TdtBmsPoller::taskEntry(void* arg) {
 
 void TdtBmsPoller::run() {
   NimBLEDevice::init("");
+
+  // transmit power: DEFAULT covers connecting and connections, SCAN covers scan requests
+  esp_err_t rc_def  = esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, (esp_power_level_t)BMS_BLE_TX_POWER);
+  esp_err_t rc_scan = esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_SCAN, (esp_power_level_t)BMS_BLE_TX_POWER);
+  BMS_LOG("BMS: TX power set (default rc %d, scan rc %d), now default %d dBm, scan %d dBm\n", (int)rc_def, (int)rc_scan,
+          bleLevelToDbm(esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_DEFAULT)),
+          bleLevelToDbm(esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_SCAN)));
+
   _client = NimBLEDevice::createClient();
   _client->setConnectTimeout(BMS_CONNECT_TIMEOUT_SECS);
   BMS_LOG("BMS: Bluetooth started, polling every %lu s\n", (unsigned long)(_interval_ms / 1000));
