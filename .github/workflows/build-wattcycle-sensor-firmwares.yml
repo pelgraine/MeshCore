@@ -2,12 +2,10 @@ name: Build Wattcycle Sensor Firmwares
 
 # Builds every PlatformIO env with "wattcycle_sensor" in its name, and uploads
 # the plain and merged .bin files for each one as a workflow artifact.
+# Manual only: Actions tab > Build Wattcycle Sensor Firmwares > Run workflow.
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - wattcycle-bms-sensor
 
 jobs:
 
