@@ -25,6 +25,7 @@ TdtBmsPoller::TdtBmsPoller() {
   _interval_ms = 60000;
   _lock = NULL;
   _rx_mux = portMUX_INITIALIZER_UNLOCKED;
+  _rx_bytes = 0;
   _client = NULL;
   memset(_batts, 0, sizeof(_batts));
 }
@@ -46,6 +47,10 @@ void TdtBmsPoller::begin(const char* names_csv, uint32_t interval_secs) {
       _count++;
     }
     sp = ep ? ep + 1 : NULL;
+  }
+  BMS_LOG("BMS: %d battery name(s) configured\n", _count);
+  for (int i = 0; i < _count; i++) {
+    BMS_LOG("BMS:   [%d] '%s'\n", i, _batts[i].name);
   }
   if (_count == 0) return;   // nothing to poll
 
@@ -76,6 +81,7 @@ void TdtBmsPoller::run() {
   NimBLEDevice::init("");
   _client = NimBLEDevice::createClient();
   _client->setConnectTimeout(BMS_CONNECT_TIMEOUT_SECS);
+  BMS_LOG("BMS: Bluetooth started, polling every %lu s\n", (unsigned long)(_interval_ms / 1000));
 
   for (;;) {
     scanForMissing();
@@ -100,7 +106,9 @@ void TdtBmsPoller::scanForMissing() {
   scan->setActiveScan(true);   // the name may only be in the scan response
   scan->setInterval(100);
   scan->setWindow(99);
+  BMS_LOG("BMS: scanning for %d s\n", BMS_SCAN_SECS);
   NimBLEScanResults results = scan->start(BMS_SCAN_SECS, false);
+  BMS_LOG("BMS: scan saw %d device(s)\n", results.getCount());
 
   for (int j = 0; j < results.getCount(); j++) {
     NimBLEAdvertisedDevice dev = results.getDevice(j);
@@ -113,7 +121,22 @@ void TdtBmsPoller::scanForMissing() {
         memcpy(b.addr, addr.getNative(), 6);
         b.addr_type = addr.getType();
         b.have_addr = true;
+        BMS_LOG("BMS: found '%s' at %s (address type %u, RSSI %d)\n", b.name, addr.toString().c_str(),
+                (unsigned)b.addr_type, dev.getRSSI());
       }
+    }
+  }
+
+  for (int i = 0; i < _count; i++) {
+    if (!_batts[i].have_addr) {
+      BMS_LOG("BMS: '%s' not seen. Named devices in this scan:\n", _batts[i].name);
+      for (int j = 0; j < results.getCount(); j++) {
+        NimBLEAdvertisedDevice dev = results.getDevice(j);
+        if (dev.haveName()) {
+          BMS_LOG("BMS:   '%s' (RSSI %d)\n", dev.getName().c_str(), dev.getRSSI());
+        }
+      }
+      break;   // the list is the same for every missing battery
     }
   }
   scan->clearResults();
@@ -122,6 +145,7 @@ void TdtBmsPoller::scanForMissing() {
 void TdtBmsPoller::onNotify(const uint8_t* data, size_t len) {
   portENTER_CRITICAL(&_rx_mux);
   _rx.feed(data, len);
+  _rx_bytes += len;
   portEXIT_CRITICAL(&_rx_mux);
 }
 
@@ -134,7 +158,10 @@ bool TdtBmsPoller::sendWithHead(NimBLERemoteCharacteristic* tx, uint8_t head, ui
     _rx.reset();
     portEXIT_CRITICAL(&_rx_mux);
 
-    if (!tx->writeValue(req, req_len, true)) return false;   // write with response, as aiobmsble does
+    if (!tx->writeValue(req, req_len, true)) {   // write with response, as aiobmsble does
+      BMS_LOG("BMS:   cmd 0x%02X head 0x%02X: write failed\n", cmd, head);
+      return false;
+    }
 
     uint32_t start = millis();
     while (millis() - start < BMS_REPLY_TIMEOUT_MS) {
@@ -148,8 +175,21 @@ bool TdtBmsPoller::sendWithHead(NimBLERemoteCharacteristic* tx, uint8_t head, ui
         got = true;
       }
       portEXIT_CRITICAL(&_rx_mux);
-      if (got && tdtIsReplyTo(frame, frame_len, cmd)) return true;
+      if (got && tdtIsReplyTo(frame, frame_len, cmd)) {
+        BMS_LOG("BMS:   cmd 0x%02X head 0x%02X: reply, %u bytes\n", cmd, head, (unsigned)frame_len);
+        return true;
+      }
+      if (got) {
+        BMS_LOG("BMS:   cmd 0x%02X head 0x%02X: other frame (cmd 0x%02X, error 0x%02X)\n", cmd, head,
+                frame_len > 5 ? frame[5] : 0, frame_len > 4 ? frame[4] : 0);
+      }
     }
+    uint32_t rx_bytes;
+    portENTER_CRITICAL(&_rx_mux);
+    rx_bytes = _rx_bytes;
+    portEXIT_CRITICAL(&_rx_mux);
+    BMS_LOG("BMS:   cmd 0x%02X head 0x%02X attempt %d: no reply (notification bytes so far: %lu)\n",
+            cmd, head, attempt + 1, (unsigned long)rx_bytes);
   }
   return false;
 }
@@ -175,10 +215,14 @@ bool TdtBmsPoller::pollOne(Battery& b) {
   raw.type = b.addr_type;
   NimBLEAddress addr(raw);
 
+  BMS_LOG("BMS: connecting to '%s'\n", b.name);
   if (!_client->connect(addr, true)) {
+    int err = _client->getLastError();
+    BMS_LOG("BMS: connect failed (error %d %s), will scan again\n", err, NimBLEUtils::returnCodeToString(err));
     b.have_addr = false;   // scan for it again next cycle
     return false;
   }
+  BMS_LOG("BMS: connected (MTU %u)\n", (unsigned)_client->getMTU());
 
   bool ok = false;
   uint8_t frame[TDT_MAX_FRAME];
@@ -186,32 +230,59 @@ bool TdtBmsPoller::pollOne(Battery& b) {
 
   do {
     NimBLERemoteService* svc = _client->getService(NimBLEUUID((uint16_t)0xFFF0));
-    if (svc == NULL) break;
+    if (svc == NULL) {
+      BMS_LOG("BMS: service FFF0 not found\n");
+      break;
+    }
     NimBLERemoteCharacteristic* rx = svc->getCharacteristic(NimBLEUUID((uint16_t)0xFFF1));
     NimBLERemoteCharacteristic* tx = svc->getCharacteristic(NimBLEUUID((uint16_t)0xFFF2));
-    if (rx == NULL || tx == NULL) break;
+    if (rx == NULL || tx == NULL) {
+      BMS_LOG("BMS: characteristic missing (FFF1 %s, FFF2 %s)\n", rx ? "ok" : "missing", tx ? "ok" : "missing");
+      break;
+    }
 
     // unlock step (aiobmsble skips it when the characteristic is missing)
     NimBLERemoteCharacteristic* cfg = svc->getCharacteristic(NimBLEUUID((uint16_t)0xFFFA));
     if (cfg != NULL) {
-      cfg->writeValue((const uint8_t*)BMS_UNLOCK, strlen(BMS_UNLOCK), true);
-      cfg->readValue();   // aiobmsble reads it back (1 = unlocked); the result is not needed
+      bool wrote = cfg->writeValue((const uint8_t*)BMS_UNLOCK, strlen(BMS_UNLOCK), true);
+      NimBLEAttValue v = cfg->readValue();   // aiobmsble reads it back (1 = unlocked); the result is not needed
+      BMS_LOG("BMS: unlock write %s, read back %u byte(s), first 0x%02X\n", wrote ? "ok" : "failed",
+              (unsigned)v.size(), v.size() > 0 ? v.data()[0] : 0);
+    } else {
+      BMS_LOG("BMS: no FFFA characteristic, unlock skipped\n");
     }
 
     portENTER_CRITICAL(&_rx_mux);
     _rx.reset();
+    _rx_bytes = 0;
     portEXIT_CRITICAL(&_rx_mux);
     if (!rx->subscribe(true, [this](NimBLERemoteCharacteristic* c, uint8_t* data, size_t len, bool is_notify) {
           onNotify(data, len);
-        }, true)) break;
+        }, true)) {
+      BMS_LOG("BMS: subscribe to FFF1 failed\n");
+      break;
+    }
+    BMS_LOG("BMS: subscribed to FFF1\n");
 
     // device info first, as aiobmsble does; it also gives the field layout (firmware 1.x or not)
-    if (!sendCommand(tx, b, TDT_CMD_INFO, frame, frame_len)) break;
+    if (!sendCommand(tx, b, TDT_CMD_INFO, frame, frame_len)) {
+      BMS_LOG("BMS: no reply to device info (0x92)\n");
+      break;
+    }
     bool fw_v1 = tdtIsFirmwareV1(frame, frame_len);
+    BMS_LOG("BMS: device info ok, command head 0x%02X, firmware 1.x layout: %s\n", b.head, fw_v1 ? "yes" : "no");
 
-    if (!sendCommand(tx, b, TDT_CMD_STATUS, frame, frame_len)) break;
+    if (!sendCommand(tx, b, TDT_CMD_STATUS, frame, frame_len)) {
+      BMS_LOG("BMS: no reply to status (0x8C)\n");
+      break;
+    }
     TdtBmsData d;
-    if (!tdtDecodeStatus(frame, frame_len, fw_v1, d)) break;
+    if (!tdtDecodeStatus(frame, frame_len, fw_v1, d)) {
+      BMS_LOG("BMS: status reply could not be decoded (%u bytes)\n", (unsigned)frame_len);
+      break;
+    }
+    BMS_LOG("BMS: '%s' %u%%, %.2f V, %.1f A, %.1f Ah, avg temp %.1f C\n", b.name, (unsigned)d.soc,
+            d.voltage, d.current, d.remaining_ah, d.avg_temp_c);
 
     xSemaphoreTake(_lock, portMAX_DELAY);
     b.data = d;
@@ -226,5 +297,6 @@ bool TdtBmsPoller::pollOne(Battery& b) {
   while (_client->isConnected() && millis() - start < 3000) {
     vTaskDelay(pdMS_TO_TICKS(50));
   }
+  BMS_LOG("BMS: disconnected%s\n", _client->isConnected() ? " (still connected after 3 s)" : "");
   return ok;
 }

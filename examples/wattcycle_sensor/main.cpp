@@ -76,11 +76,24 @@ protected:
   }
 
   void queryExtraTelemetry(uint8_t requester_permissions, CayenneLPP& telemetry) override {
+    BMS_LOG("BMS: telemetry built, permissions 0x%02X, environment %s\n", requester_permissions,
+            (requester_permissions & TELEM_PERM_ENVIRONMENT) ? "allowed" : "NOT allowed");
     if ((requester_permissions & TELEM_PERM_ENVIRONMENT) == 0) return;
 
     for (int i = 0; i < bms.getCount(); i++) {
       TdtBmsData d;
-      if (!getFreshReading(i, d)) continue;
+      uint32_t age_secs = 0;
+      bool have = bms.getReading(i, d, age_secs);
+      if (!have || age_secs > BMS_STALE_SECS) {
+        if (!have) {
+          BMS_LOG("BMS:   '%s' left out: no reading yet\n", bms.getName(i));
+        } else {
+          BMS_LOG("BMS:   '%s' left out: reading %lu s old\n", bms.getName(i), (unsigned long)age_secs);
+        }
+        continue;
+      }
+      BMS_LOG("BMS:   '%s' added on channel %d (reading %lu s old)\n", bms.getName(i),
+              BMS_TELEM_CHANNEL_BASE + i, (unsigned long)age_secs);
 
       uint8_t ch = BMS_TELEM_CHANNEL_BASE + i;
       telemetry.addPercentage(ch, d.soc);

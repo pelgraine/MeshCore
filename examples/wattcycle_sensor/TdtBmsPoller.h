@@ -13,6 +13,13 @@
   #define BMS_MAX_BATTERIES  4
 #endif
 
+// Diagnostic status lines on the serial port (set BMS_DEBUG=1 in platformio.ini)
+#if defined(BMS_DEBUG) && BMS_DEBUG
+  #define BMS_LOG(...)  Serial.printf(__VA_ARGS__)
+#else
+  #define BMS_LOG(...)  do { } while (0)
+#endif
+
 #define BMS_NAME_MAX  32
 
 class NimBLEClient;
@@ -49,6 +56,7 @@ private:
   SemaphoreHandle_t _lock;        // guards have_reading, read_millis, data
   portMUX_TYPE      _rx_mux;      // guards _rx (filled from the BLE host task)
   TdtFrameAssembler _rx;
+  uint32_t          _rx_bytes;    // notification bytes received (diagnostics)
   NimBLEClient*     _client;
 
   static void taskEntry(void* arg);
