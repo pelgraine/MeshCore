@@ -1,3 +1,108 @@
+# Battery monitor sensors (Wattcycle and Victron)
+
+This branch adds MeshCore sensor builds that read battery data over Bluetooth and report it in the node's telemetry, with a high priority alert when charge gets low:
+
+* **Wattcycle sensor**: connects to Wattcycle LiFePO4 batteries that have Bluetooth (TDT smart BMS) and reads them.
+* **Victron sensor**: listens for the encrypted "Instant Readout" broadcasts from Victron battery monitors such as the SmartShunt. It never connects to them.
+
+> **Important: your battery details are built into the firmware.** Edit `platformio.ini` with your own battery names (and, for Victron, your keys) **before** you build and flash. The settings below are the author's own devices, so a node flashed without editing them will not find yours. If you change a setting later, rebuild and flash again.
+
+## 1. Pick your build
+
+| Board | File to edit | Wattcycle build | Victron build |
+|---|---|---|---|
+| Heltec V3 | `variants/heltec_v3/platformio.ini` | `Heltec_v3_wattcycle_sensor` | `Heltec_v3_victron_sensor` |
+| Heltec V4 (screenless) | `variants/heltec_v4/platformio.ini` | `heltec_v4_wattcycle_sensor` | `heltec_v4_victron_sensor` |
+| Seeed XIAO ESP32-S3 + Wio-SX1262 | `variants/xiao_s3_wio/platformio.ini` | `Xiao_S3_WIO_wattcycle_sensor` | `Xiao_S3_WIO_victron_sensor` |
+
+Each build has its own section in the file, starting with `[env:<build name>]`. Only edit the lines inside the section for the build you are going to flash.
+
+## 2a. Wattcycle: find your battery's Bluetooth name
+
+Each Wattcycle battery has a Bluetooth name such as `XDZN_001_E4E7`. Either:
+
+* open the **WattCycle** app: the name is shown at the top of the battery's card under **Connected Devices**, or
+* scan from a computer with [aiobmsble](https://github.com/patman15/aiobmsble). Batteries it can read are listed with `Found matching BMS type: TDT smart BMS`:
+
+  ```
+  python3 -m venv ~/bms-test
+  source ~/bms-test/bin/activate
+  pip install aiobmsble aiooui
+  aiobmsble -v
+  deactivate
+  ```
+
+Close the WattCycle app before the node (or the scan) tries to read the battery.
+
+## 2b. Victron: turn on Instant Readout and copy the key
+
+For each Victron device:
+
+1. In **VictronConnect**, open the device, tap the **gear** icon, open the menu and choose **Product info**.
+2. Scroll down to **Instant readout via Bluetooth** and turn it on.
+3. Tap **Show** next to **Instant readout details** and copy the **encryption key** (32 characters, 0-9 and a-f).
+4. Note the device's Bluetooth name: its product name followed by its serial number, for example `SmartShunt HQ2301RCTU4`.
+
+Treat the key like a password: anyone who has it can decode that device's readings. Don't commit it to a public repository.
+
+## 3. Edit `platformio.ini` (before flashing)
+
+### Wattcycle builds
+
+| Line | What to put |
+|---|---|
+| `-D BMS_NAMES='"XDZN_001_E4E7"'` | Your battery's name from step 2a. For more than one battery, put them all inside the **same** quotes, separated by commas, up to 4: `'"XDZN_001_AAAA,XDZN_001_BBBB"'` |
+| `-D BMS_LOW_ALERT_PCT=20` | Charge % at or below which the node sends a high priority alert |
+| `-D BMS_POLL_INTERVAL_SECS=240` | Seconds between reads. Readings older than 300 seconds are left out of telemetry and skipped by the alert, so keep this well under 300 (or also add `-D BMS_STALE_SECS=<seconds>`) |
+| `-D BMS_BLE_TX_POWER=ESP_PWR_LVL_P3` | Optional Bluetooth transmit power, from `ESP_PWR_LVL_N24` (-24 dBm) to `ESP_PWR_LVL_P21` (+21 dBm, the default when this line is absent) |
+| `-D BMS_DEBUG=1` | Status lines on the serial monitor; set to `0` to turn them off |
+
+### Victron builds
+
+| Line | What to put |
+|---|---|
+| `-D VTR_DEVICES='"SmartShunt HQ2301RCTU4:<key>"'` | `name:key` for each device, from step 2b. For more than one device, separate entries with commas inside the **same** quotes, up to 4. If you write the entry as `:<key>` (nothing before the colon), the node accepts any battery monitor whose broadcast decodes with that key |
+| `-D VTR_LOW_ALERT_PCT=20` | Charge % at or below which the node sends a high priority alert |
+| `-D VTR_SCAN_SECS=10` | How long each listening cycle scans for |
+| `-D VTR_SCAN_INTERVAL_SECS=240` | Seconds between listening cycles. Readings older than 300 seconds are left out of telemetry, so keep the gap well under 300 |
+| `-D VTR_DEBUG=1` | Status lines on the serial monitor; set to `0` to turn them off |
+
+### All builds
+
+* `-D ADMIN_PASSWORD='"password"'`: change this, or change it after flashing with the `password` command.
+* `-D ADVERT_NAME='"..."'`: the node's name on the mesh (also changeable later with `set name`).
+
+## 4. Build and flash
+
+With the board plugged in over USB:
+
+```
+pio run -e <build name> -t upload
+```
+
+For a merged image (bootloader, partitions and app in one file, for a fresh install):
+
+```
+pio run -e <build name> -t mergebin
+```
+
+which writes `.pio/build/<build name>/firmware-merged.bin`.
+
+## 5. First-time setup (serial monitor)
+
+Run `pio device monitor -b 115200`, then:
+
+1. `set radio <freq>,<bw>,<sf>,<cr>` with your mesh's settings (`get radio` on an existing node shows them), then `reboot`.
+2. `password <new password>` if you didn't change it in `platformio.ini`.
+3. `setperm <your companion's 64-character public key> 131` so your companion can log in as admin and receive the high priority alerts.
+
+## 6. Check it
+
+* With debug on, startup lines starting `BMS:` (Wattcycle) or `VTR:` (Victron) list the devices the node is looking for, then each read.
+* In the MeshCore app, request telemetry from the node. Channel 1 is the node itself. The first battery or device in your list is **channel 10**, the second **channel 11**, and so on. A channel only appears once that device has a reading less than 300 seconds old.
+
+---
+
 ## About MeshCore
 
 MeshCore is a lightweight, portable C++ library that enables multi-hop packet routing for embedded projects using LoRa and other packet radios. It is designed for developers who want to create resilient, decentralized communication networks that work without the internet.
