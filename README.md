@@ -1,19 +1,20 @@
-# Battery monitor sensors (Wattcycle and Victron)
+# Battery monitor sensors (Wattcycle, Victron and Bluetti)
 
 This branch adds MeshCore sensor builds that read battery data over Bluetooth and report it in the node's telemetry, with a high priority alert when charge gets low:
 
 * **Wattcycle sensor**: connects to Wattcycle LiFePO4 batteries that have Bluetooth (TDT smart BMS) and reads them.
 * **Victron sensor**: listens for the encrypted "Instant Readout" broadcasts from Victron battery monitors such as the SmartShunt. It never connects to them.
+* **Bluetti sensor**: connects to Bluetti power stations (tested with the Elite 30 V2: EL30V2 and PR30V2) and reads battery %, time remaining (EL30V2 only), DC (solar) input, AC input, DC output and AC output.
 
-> **Important: your battery details are built into the firmware.** Edit `platformio.ini` with your own battery names (and, for Victron, your keys) **before** you build and flash. The settings below are the author's own devices, so a node flashed without editing them will not find yours. If you change a setting later, rebuild and flash again.
+> **Important: your battery details are built into the firmware.** Edit `platformio.ini` with your own battery names (for Victron, your keys; for Bluetti, your serial numbers) **before** you build and flash. The settings below are the author's own devices, so a node flashed without editing them will not find yours. If you change a setting later, rebuild and flash again.
 
 ## 1. Pick your build
 
-| Board | File to edit | Wattcycle build | Victron build |
-|---|---|---|---|
-| Heltec V3 | `variants/heltec_v3/platformio.ini` | `Heltec_v3_wattcycle_sensor` | `Heltec_v3_victron_sensor` |
-| Heltec V4 (screenless) | `variants/heltec_v4/platformio.ini` | `heltec_v4_wattcycle_sensor` | `heltec_v4_victron_sensor` |
-| Seeed XIAO ESP32-S3 + Wio-SX1262 | `variants/xiao_s3_wio/platformio.ini` | `Xiao_S3_WIO_wattcycle_sensor` | `Xiao_S3_WIO_victron_sensor` |
+| Board | File to edit | Wattcycle build | Victron build | Bluetti build |
+|---|---|---|---|---|
+| Heltec V3 | `variants/heltec_v3/platformio.ini` | `Heltec_v3_wattcycle_sensor` | `Heltec_v3_victron_sensor` | `Heltec_v3_bluetti_sensor` |
+| Heltec V4 (screenless) | `variants/heltec_v4/platformio.ini` | `heltec_v4_wattcycle_sensor` | `heltec_v4_victron_sensor` | `heltec_v4_bluetti_sensor` |
+| Seeed XIAO ESP32-S3 + Wio-SX1262 | `variants/xiao_s3_wio/platformio.ini` | `Xiao_S3_WIO_wattcycle_sensor` | `Xiao_S3_WIO_victron_sensor` | `Xiao_S3_WIO_bluetti_sensor` |
 
 Each build has its own section in the file, starting with `[env:<build name>]`. Only edit the lines inside the section for the build you are going to flash.
 
@@ -45,6 +46,23 @@ For each Victron device:
 
 Treat the key like a password: anyone who has it can decode that device's readings. Don't commit it to a public repository.
 
+## 2c. Bluetti: find each unit's serial number
+
+The node finds each unit by matching the end of its Bluetooth name against what you list, so list the serial number (the PR30V2 tested advertises as `PR30V22603110572960`: model, then serial number). Read the serial number from a computer with [bluetti-bt-lib](https://pypi.org/project/bluetti-bt-lib/):
+
+```
+python3 -m venv ~/bluetti-venv
+source ~/bluetti-venv/bin/activate
+pip install bluetti-bt-lib
+bluetti-scan
+bluetti-read -m <address from bluetti-scan> -t <model from bluetti-scan> -e 1
+deactivate
+```
+
+`bluetti-scan` prints a model and an address for each unit, such as `['PR30V2', '3DEA681C-...']`: pass only the address to `-m`. The `FieldName.DEVICE_SN` line of `bluetti-read` is the serial number. These units need the encrypted connection (`-e 1`); the node always uses it.
+
+Close the BLUETTI app before the node (or the read) connects to a unit.
+
 ## 3. Edit `platformio.ini` (before flashing)
 
 ### Wattcycle builds
@@ -66,6 +84,16 @@ Treat the key like a password: anyone who has it can decode that device's readin
 | `-D VTR_SCAN_SECS=10` | How long each listening cycle scans for |
 | `-D VTR_SCAN_INTERVAL_SECS=240` | Seconds between listening cycles. Readings older than 300 seconds are left out of telemetry, so keep the gap well under 300 |
 | `-D VTR_DEBUG=1` | Status lines on the serial monitor; set to `0` to turn them off |
+
+### Bluetti builds
+
+| Line | What to put |
+|---|---|
+| `-D BLUETTI_UNITS='"2603110572960,2534001795459,2523000091359"'` | Each unit's serial number from step 2c, separated by commas inside the **same** quotes, up to 4. The full Bluetooth name also works |
+| `-D BLUETTI_LOW_ALERT_PCT=10` | Charge % at or below which the node sends a high priority alert |
+| `-D BLUETTI_POLL_INTERVAL_SECS=240` | Seconds between reads. Readings older than 600 seconds are left out of telemetry and skipped by the alert (change with `-D BLUETTI_STALE_SECS=<seconds>`) |
+| `-D BLUETTI_BLE_TX_POWER=ESP_PWR_LVL_P3` | Optional Bluetooth transmit power, from `ESP_PWR_LVL_N24` (-24 dBm) to `ESP_PWR_LVL_P21` (+21 dBm, the default when this line is absent) |
+| `-D BLUETTI_DEBUG=1` | Status lines on the serial monitor; set to `0` to turn them off |
 
 ### All builds
 
@@ -98,8 +126,18 @@ Run `pio device monitor -b 115200`, then:
 
 ## 6. Check it
 
-* With debug on, startup lines starting `BMS:` (Wattcycle) or `VTR:` (Victron) list the devices the node is looking for, then each read.
-* In the MeshCore app, request telemetry from the node. Channel 1 is the node itself. The first battery or device in your list is **channel 10**, the second **channel 11**, and so on. A channel only appears once that device has a reading less than 300 seconds old.
+* With debug on, startup lines starting `BMS:` (Wattcycle), `VTR:` (Victron) or `BLUETTI:` (Bluetti) list the devices the node is looking for, then each read.
+* In the MeshCore app, request telemetry from the node. Channel 1 is the node itself.
+* Wattcycle and Victron: the first battery or device in your list is **channel 10**, the second **channel 11**, and so on. A channel only appears once that device has a reading less than 300 seconds old.
+* Bluetti: each unit gets five channels. The first unit in your list uses 10 to 14, the second 20 to 24, the third 30 to 34, the fourth 40 to 44. They only appear once that unit has a reading less than 600 seconds old.
+
+  | Channel (first unit) | Reading |
+  |---|---|
+  | 10 | Battery %, and time remaining in minutes (EL30V2 only, shown as a plain number) |
+  | 11 | DC input watts (solar) |
+  | 12 | AC input watts |
+  | 13 | DC output watts |
+  | 14 | AC output watts |
 
 ---
 
