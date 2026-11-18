@@ -134,10 +134,12 @@ Run `pio device monitor -b 115200`, then:
   | Channel (first unit) | Reading |
   |---|---|
   | 10 | Battery %, and time remaining in minutes (EL30V2 only, shown as a plain number) |
-  | 11 | DC input watts (solar) |
+  | 11 | DC input watts (including solar/PV input) |
   | 12 | AC input watts |
   | 13 | DC output watts |
   | 14 | AC output watts |
+
+  The MeshCore app shows channels 11 to 14 the same way (a plug icon labelled "Power"), so tell them apart by channel number. The order is fixed in the firmware, and the `BLUETTI:` reading line on the serial monitor lists them in the same order: DC in, AC in, DC out, AC out.
 
 ---
 
