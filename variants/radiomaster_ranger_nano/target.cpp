@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include "target.h"
 
-ESP32Board board;
+RangerNanoBoard board;
 
 static SPIClass spi;
 RADIO_CLASS radio = new Module(P_LORA_NSS, P_LORA_DIO_1, P_LORA_RESET, P_LORA_BUSY, spi);
@@ -44,9 +44,9 @@ static void ranger_diag_task(void*) {
 #endif
 
 bool radio_init() {
-  // PA cooling fan (ExpressLRS misc_fan_en = GPIO 27), always on.
-  pinMode(PIN_FAN_EN, OUTPUT);
-  digitalWrite(PIN_FAN_EN, HIGH);
+  // PA cooling fan (ExpressLRS misc_fan_en = GPIO 27): off at boot, on while
+  // transmitting, off FAN_HOLD_SECS after the last transmission (RangerNanoBoard.h).
+  board.fanBegin();
 
 #ifdef RANGER_NANO_DIAG
   xTaskCreate(ranger_diag_task, "diag", 3072, NULL, 1, NULL);
