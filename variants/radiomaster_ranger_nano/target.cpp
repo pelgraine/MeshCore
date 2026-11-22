@@ -48,6 +48,13 @@ bool radio_init() {
   // transmitting, off FAN_HOLD_SECS after the last transmission (RangerNanoBoard.h).
   board.fanBegin();
 
+  // Logo RGB LED (ExpressLRS led_rgb = GPIO 15, WS2812-type addressable LED).
+  // Send one "all colours zero" frame to switch it off. Remove PIN_LOGO_RGB from
+  // platformio.ini to leave the LED alone.
+#ifdef PIN_LOGO_RGB
+  neopixelWrite(PIN_LOGO_RGB, 0, 0, 0);
+#endif
+
 #ifdef RANGER_NANO_DIAG
   xTaskCreate(ranger_diag_task, "diag", 3072, NULL, 1, NULL);
 #endif

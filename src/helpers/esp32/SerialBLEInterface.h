@@ -8,10 +8,28 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 
+// BLE_GARMIN (build flag): make the node usable from a Garmin Connect IQ watch.
+//   1. Just-works pairing: the watch cannot enter a PIN, so the UART
+//      characteristics require an encrypted but unauthenticated link.
+//   2. Small-MTU slicing: the watch never raises the ATT MTU above 23, so
+//      frames travel as tagged 20-byte slices in both directions.
+//   3. Sensor advertising: the watch's own Connect IQ app never starts pairing
+//      with an unknown node, but its Sensors & Accessories menu does. The node
+//      also advertises as a heart-rate sensor so that menu lists it; the bond
+//      made there is then used by the watch app. No heart-rate data is sent.
+// Verified on a fenix 7S against a T-Deck Max (Meck) 2026-10-26.
+// Phones still pair while the flag is on, without a PIN.
+
 class SerialBLEInterface : public BaseSerialInterface, BLESecurityCallbacks, BLEServerCallbacks, BLECharacteristicCallbacks {
   BLEServer *pServer;
   BLEService *pService;
   BLECharacteristic * pTxCharacteristic;
+#ifdef BLE_GARMIN
+  BLEService *pSensorService;        // Heart Rate service, started and stopped with pService
+  uint16_t _tx_off;                  // bytes of send_queue[0] already sent as slices (0 = none yet)
+  uint8_t  _rx_buf[MAX_FRAME_SIZE];  // reassembly buffer for sliced writes
+  int      _rx_len;                  // bytes collected so far (-1 = not mid-frame)
+#endif
   bool deviceConnected;
   bool oldDeviceConnected;
   bool _isEnabled;
@@ -55,6 +73,10 @@ public:
   SerialBLEInterface() {
     pServer = NULL;
     pService = NULL;
+#ifdef BLE_GARMIN
+    pSensorService = NULL;
+    _tx_off = 0; _rx_len = -1;
+#endif
     deviceConnected = false;
     oldDeviceConnected = false;
     adv_restart_time = 0;
