@@ -38,8 +38,33 @@ static void ranger_diag_task(void*) {
                   MAX_CONTACTS, (unsigned)sizeof(ContactInfo),
                   MAX_GROUP_CHANNELS, (unsigned)sizeof(ChannelDetails));
   #endif
+  #ifdef RANGER_NANO_TXDEBUG
+    // Idle (listening) state of the PA/LNA pins: expect RXEN=1 TXEN=0, both outputs.
+    uint8_t p = RangerNanoBoard::readPaPins(), e = RangerNanoBoard::readPaPinsEnabled();
+    Serial.printf(" | now RXEN(32)=%d TXEN(33)=%d, outputs %d/%d",
+                  p & 1, (p >> 1) & 1, e & 1, (e >> 1) & 1);
+  #endif
     Serial.println();
   }
+}
+#endif
+
+#ifdef RANGER_NANO_TXDEBUG
+// One line per send, called from RangerNanoBoard::onAfterTransmit().
+//   during TX = pins sampled 20 ms into the send (expect RXEN=0 TXEN=1)
+//   after TX  = pins once the send has finished (radio back in standby)
+//   chip power = last value passed to RadioLib after the 0 dBm ceiling, and its result code
+void ranger_txdebug_report(uint32_t n, int mid_pins, uint8_t after_pins, uint32_t ms) {
+  if (mid_pins < 0) {
+    Serial.printf("[txdbg] send #%lu: during TX not sampled (send ended or failed before 20 ms)", (unsigned long)n);
+  } else {
+    Serial.printf("[txdbg] send #%lu: during TX RXEN(32)=%d TXEN(33)=%d",
+                  (unsigned long)n, mid_pins & 1, (mid_pins >> 1) & 1);
+  }
+  Serial.printf(" | after RXEN=%d TXEN=%d | chip power %d dBm (RadioLib result %d) | rxgain %s | %lu ms\n",
+                after_pins & 1, (after_pins >> 1) & 1,
+                (int)radio.getAppliedPower(), (int)radio.getAppliedPowerErr(),
+                radio.getRxBoostedGainMode() ? "on" : "off", (unsigned long)ms);
 }
 #endif
 

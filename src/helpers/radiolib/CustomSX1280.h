@@ -21,6 +21,8 @@ class CustomSX1280 : public SX1280 {
   uint32_t _activityAt = 0;
   bool _headerSeen = false;
   uint8_t _sf = 0;          // tracked here: RadioLib keeps the SX128x SF as a raw register value
+  int8_t _applied_pwr = 0;      // tracked here: RadioLib keeps the SX128x power as a private raw value
+  int16_t _applied_pwr_err = 0;
   bool _hiSens = false;     // high-sensitivity (LNA boost) mode, the SX128x analogue of boosted RX gain
 
   public:
@@ -94,8 +96,13 @@ class CustomSX1280 : public SX1280 {
         MESH_DEBUG_PRINTLN("SX1280 setOutputPower(%d) clamped to %d dBm ceiling", (int)pwr, (int)SX128X_MAX_CHIP_DBM);
         pwr = SX128X_MAX_CHIP_DBM;
       }
-      return SX1280::setOutputPower(pwr);
+      int16_t err = SX1280::setOutputPower(pwr);
+      _applied_pwr = pwr;          // last chip power passed to RadioLib (after the ceiling clamp)
+      _applied_pwr_err = err;      // RadioLib result for it (0 = OK)
+      return err;
     }
+    int8_t getAppliedPower() const { return _applied_pwr; }
+    int16_t getAppliedPowerErr() const { return _applied_pwr_err; }
 
     int16_t setSpreadingFactor(uint8_t sf) {
       _sf = sf;
