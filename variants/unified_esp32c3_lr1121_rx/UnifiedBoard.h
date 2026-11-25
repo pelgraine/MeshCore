@@ -8,6 +8,10 @@
 #ifndef UNIFIED_RGB_LED_BRIGHTNESS
 #define UNIFIED_RGB_LED_BRIGHTNESS 16
 #endif
+// Set to 0 to drop the green flash on received packets; red (transmit) and blue (OTA) are unaffected.
+#ifndef UNIFIED_RGB_RX_FLASH
+#define UNIFIED_RGB_RX_FLASH 1
+#endif
 
 #if defined(UNIFIED_OTA_STOP_BLE) && defined(ENABLE_COMPANION_OTA) && !defined(DISABLE_WIFI_OTA)
 void unifiedStopBluetoothForOTA();
@@ -68,7 +72,7 @@ public:
   }
 
   void onPacketReceived() {
-#if UNIFIED_RGB_PACKET_LED
+#if UNIFIED_RGB_PACKET_LED && UNIFIED_RGB_RX_FLASH
     if (ota_active) return;
     if (transmitting) return;
     received_at = millis();
