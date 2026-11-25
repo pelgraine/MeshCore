@@ -35,8 +35,10 @@ EnvironmentSensorManager sensors;
 //   heap free    = RAM free right now
 //   heap min     = lowest free RAM seen since boot (the number that matters for sizing)
 //   heap largest = biggest single free block
+//   storage      = bytes used / usable bytes on the SPIFFS partition (contacts, channels, adverts, prefs)
 // This task's own 3 KB stack comes out of the same heap.
 #include <esp_heap_caps.h>
+#include <SPIFFS.h>
 #include <helpers/ContactInfo.h>
 #include <helpers/ChannelDetails.h>
 #include <helpers/BaseSerialInterface.h>
@@ -56,6 +58,8 @@ static void dake_diag_task(void*) {
   #ifdef OFFLINE_QUEUE_SIZE
     Serial.printf(" | queue=%d x %uB", OFFLINE_QUEUE_SIZE, (unsigned)(MAX_FRAME_SIZE + 1));
   #endif
+    Serial.printf(" | storage used=%u of %u",
+                  (unsigned)SPIFFS.usedBytes(), (unsigned)SPIFFS.totalBytes());
     Serial.println();
   }
 }
