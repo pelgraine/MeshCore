@@ -21,7 +21,11 @@ static SPIClass spi(FSPI);
 RADIO_CLASS radio = new Module(P_LORA_NSS, P_LORA_DIO_1, P_LORA_RESET, P_LORA_BUSY, spi);
 WRAPPER_CLASS radio_driver(radio, board);
 ESP32RTCClock rtc_clock;
+#ifdef UNIFIED_I2C
 EnvironmentSensorManager sensors;
+#else
+SensorManager sensors;
+#endif
 
 // I2C builds hand the RX/TX pads to the sensor, so there is no serial console to print to.
 #if defined(DAKE_DIAG) && !defined(UNIFIED_I2C)

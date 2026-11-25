@@ -10,7 +10,12 @@
 extern DakeBoard board;
 extern WRAPPER_CLASS radio_driver;
 extern ESP32RTCClock rtc_clock;
+#ifdef UNIFIED_I2C
 extern EnvironmentSensorManager sensors;
+#else
+// Builds without the INA219 have no I2C pins: the plain manager skips the start-up I2C scan.
+extern SensorManager sensors;
+#endif
 
 bool radio_init();
 mesh::LocalIdentity radio_new_identity();
