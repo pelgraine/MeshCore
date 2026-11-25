@@ -23,7 +23,48 @@ WRAPPER_CLASS radio_driver(radio, board);
 ESP32RTCClock rtc_clock;
 EnvironmentSensorManager sensors;
 
+// I2C builds hand the RX/TX pads to the sensor, so there is no serial console to print to.
+#if defined(DAKE_DIAG) && !defined(UNIFIED_I2C)
+#define DAKE_DIAG_ACTIVE 1
+#endif
+
+#ifdef DAKE_DIAG_ACTIVE
+// Diagnostics: every 30 s, print heap headroom and the fixed memory sizes to the
+// serial console on the RX/TX pads (115200 baud). Remove -D DAKE_DIAG from
+// platformio.ini to drop it.
+//   heap free    = RAM free right now
+//   heap min     = lowest free RAM seen since boot (the number that matters for sizing)
+//   heap largest = biggest single free block
+// This task's own 3 KB stack comes out of the same heap.
+#include <esp_heap_caps.h>
+#include <helpers/ContactInfo.h>
+#include <helpers/ChannelDetails.h>
+#include <helpers/BaseSerialInterface.h>
+
+static void dake_diag_task(void*) {
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(30000));
+    Serial.printf("[diag] heap free=%u min=%u largest=%u",
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                  (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+  #ifdef MAX_CONTACTS
+    Serial.printf(" | contacts=%d x %uB, channels=%d x %uB",
+                  MAX_CONTACTS, (unsigned)sizeof(ContactInfo),
+                  MAX_GROUP_CHANNELS, (unsigned)sizeof(ChannelDetails));
+  #endif
+  #ifdef OFFLINE_QUEUE_SIZE
+    Serial.printf(" | queue=%d x %uB", OFFLINE_QUEUE_SIZE, (unsigned)(MAX_FRAME_SIZE + 1));
+  #endif
+    Serial.println();
+  }
+}
+#endif
+
 bool radio_init() {
+#ifdef DAKE_DIAG_ACTIVE
+  xTaskCreate(dake_diag_task, "diag", 3072, NULL, 1, NULL);
+#endif
   // Use the ESP32 internal clock; optional I2C is initialized by board.begin().
   rtc_clock.begin();
   if (!radio.std_init(&spi)) return false;
