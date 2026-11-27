@@ -30,6 +30,9 @@ struct BluettiData {
   uint16_t ac_in_w;
   uint16_t dc_out_w;
   uint16_t ac_out_w;
+#if defined(BLUETTI_EB3A) && BLUETTI_EB3A
+  uint16_t dc_in_v_centi;    // DC input (solar) volts x 100
+#endif
 };
 
 class NimBLEClient;

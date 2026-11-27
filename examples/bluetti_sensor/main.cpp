@@ -8,6 +8,9 @@
 //   12  AC input watts
 //   13  DC output watts
 //   14  AC output watts
+//
+// With BLUETTI_EB3A=1 (EB3A builds only) the EB3A's registers are read instead, there is no
+// time remaining, and channel 11 also carries the DC input (solar) voltage.
 
 #include "../simple_sensor/SensorMesh.h"
 #include "BluettiPoller.h"
@@ -103,6 +106,9 @@ protected:
         telemetry.addGenericSensor(ch, d.time_left_min);
       }
       telemetry.addPower(ch + 1, d.dc_in_w);
+#if defined(BLUETTI_EB3A) && BLUETTI_EB3A
+      telemetry.addVoltage(ch + 1, d.dc_in_v_centi / 100.0f);
+#endif
       telemetry.addPower(ch + 2, d.ac_in_w);
       telemetry.addPower(ch + 3, d.dc_out_w);
       telemetry.addPower(ch + 4, d.ac_out_w);

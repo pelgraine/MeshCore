@@ -4,7 +4,7 @@ This branch adds MeshCore sensor builds that read battery data over Bluetooth an
 
 * **Wattcycle sensor**: connects to Wattcycle LiFePO4 batteries that have Bluetooth (TDT smart BMS) and reads them.
 * **Victron sensor**: listens for the encrypted "Instant Readout" broadcasts from Victron battery monitors such as the SmartShunt. It never connects to them.
-* **Bluetti sensor**: connects to Bluetti power stations (tested with the Elite 30 V2: EL30V2 and PR30V2) and reads battery %, time remaining (EL30V2 only), DC (solar) input, AC input, DC output and AC output.
+* **Bluetti sensor**: connects to Bluetti power stations (tested with the Elite 30 V2: EL30V2 and PR30V2) and reads battery %, time remaining (EL30V2 only), DC (solar) input, AC input, DC output and AC output. The EB3A has its own build (Heltec V3 only), which also reads the DC (solar) input voltage.
 
 > **Important: your battery details are built into the firmware.** Edit `platformio.ini` with your own battery names (for Victron, your keys; for Bluetti, your serial numbers) **before** you build and flash. The settings below are the author's own devices, so a node flashed without editing them will not find yours. If you change a setting later, rebuild and flash again.
 
@@ -95,6 +95,8 @@ Close the BLUETTI app before the node (or the read) connects to a unit.
 | `-D BLUETTI_BLE_TX_POWER=ESP_PWR_LVL_P3` | Optional Bluetooth transmit power, from `ESP_PWR_LVL_N24` (-24 dBm) to `ESP_PWR_LVL_P21` (+21 dBm, the default when this line is absent) |
 | `-D BLUETTI_DEBUG=1` | Status lines on the serial monitor; set to `0` to turn them off |
 
+**EB3A:** use the separate `Heltec_v3_bluetti_eb3a_sensor` build in `variants/heltec_v3/platformio.ini`. The EB3A keeps its readings in different places from the Elite 30 V2, so the regular Bluetti builds can't read it, and this build can't read Elite 30 V2 units. It has the same lines as above (with your EB3A serial numbers in `BLUETTI_UNITS`), plus `-D BLUETTI_EB3A=1`, which must stay in.
+
 ### All builds
 
 * `-D ADMIN_PASSWORD='"password"'`: change this, or change it after flashing with the `password` command.
@@ -140,6 +142,8 @@ Run `pio device monitor -b 115200`, then:
   | 14 | AC output watts |
 
   The MeshCore app shows channels 11 to 14 the same way (a plug icon labelled "Power"), so tell them apart by channel number. The order is fixed in the firmware, and the `BLUETTI:` reading line on the serial monitor lists them in the same order: DC in, AC in, DC out, AC out.
+
+  EB3A build: the same channels, with no time remaining on channel 10, and channel 11 also shows the DC input (solar) voltage.
 
 ---
 

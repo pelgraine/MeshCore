@@ -25,6 +25,15 @@
 #define NOTIFY_CHUNK   244   // bytes per queue item; longer notifications are split
 #define NOTIFY_QUEUE   16
 
+#if defined(BLUETTI_EB3A) && BLUETTI_EB3A
+// EB3A registers (bluetti-bt-lib 0.1.8 base_device_v1.py, eb3a.py)
+#define REG_BATTERY_SOC      43
+#define REG_DC_INPUT_POWER   36
+#define REG_AC_INPUT_POWER   37
+#define REG_AC_OUTPUT_POWER  38
+#define REG_DC_OUTPUT_POWER  39
+#define REG_DC_INPUT_VOLTAGE 86    // hundredths of a volt
+#else
 // Registers (bluetti-bt-lib 0.1.8 base_device_v2.py, el30v2.py, pr30v2.py)
 #define REG_BATTERY_SOC      102
 #define REG_TIME_REMAINING   104   // EL30V2 only, minutes
@@ -32,6 +41,7 @@
 #define REG_AC_OUTPUT_POWER  142
 #define REG_DC_INPUT_POWER   144
 #define REG_AC_INPUT_POWER   146
+#endif
 
 // Characteristics (bluetti-bt-lib const.py)
 static const NimBLEUUID NOTIFY_UUID((uint16_t)0xFF01);
@@ -317,17 +327,24 @@ bool BluettiPoller::pollOne(Unit& u) {
       break;
     }
     d.soc = v;
+#if !(defined(BLUETTI_EB3A) && BLUETTI_EB3A)
     if (u.is_el30v2) {
       if (readRegister(tx, REG_TIME_REMAINING, v)) {
         d.time_left_min = v;
         d.have_time = true;
       }
     }
+#endif
     if (!readRegister(tx, REG_DC_INPUT_POWER, d.dc_in_w)) break;
     if (!readRegister(tx, REG_AC_INPUT_POWER, d.ac_in_w)) break;
     if (!readRegister(tx, REG_DC_OUTPUT_POWER, d.dc_out_w)) break;
     if (!readRegister(tx, REG_AC_OUTPUT_POWER, d.ac_out_w)) break;
 
+#if defined(BLUETTI_EB3A) && BLUETTI_EB3A
+    if (!readRegister(tx, REG_DC_INPUT_VOLTAGE, d.dc_in_v_centi)) break;
+    BLT_LOG("BLUETTI: '%s' %u%%, DC in %u W at %u.%02u V, AC in %u W, DC out %u W, AC out %u W\n", u.found_name,
+            (unsigned)d.soc, d.dc_in_w, d.dc_in_v_centi / 100, d.dc_in_v_centi % 100, d.ac_in_w, d.dc_out_w, d.ac_out_w);
+#else
     if (d.have_time) {
       BLT_LOG("BLUETTI: '%s' %u%%, %u min left, DC in %u W, AC in %u W, DC out %u W, AC out %u W\n", u.found_name,
               (unsigned)d.soc, (unsigned)d.time_left_min, d.dc_in_w, d.ac_in_w, d.dc_out_w, d.ac_out_w);
@@ -335,6 +352,7 @@ bool BluettiPoller::pollOne(Unit& u) {
       BLT_LOG("BLUETTI: '%s' %u%%, DC in %u W, AC in %u W, DC out %u W, AC out %u W\n", u.found_name,
               (unsigned)d.soc, d.dc_in_w, d.ac_in_w, d.dc_out_w, d.ac_out_w);
     }
+#endif
 
     xSemaphoreTake(_lock, portMAX_DELAY);
     u.data = d;
