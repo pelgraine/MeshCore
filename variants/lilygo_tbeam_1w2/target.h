@@ -23,3 +23,4 @@ extern EnvironmentSensorManager sensors;
 
 bool radio_init();
 mesh::LocalIdentity radio_new_identity();
+SPIClass& getRadioSPI();

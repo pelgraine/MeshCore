@@ -106,6 +106,144 @@ MultiSerialInterface interface_manager;
   DataStore store(LittleFS, rtc_clock);
 #endif
 
+#if defined(ESP32) && defined(SD_SETTINGS_BACKUP)
+// ---------------------------------------------------------------------------
+// SD card settings backup / restore, ported from Meck's companion firmware.
+// Enabled per build with -D SD_SETTINGS_BACKUP=1 (and SD_BACKUP_DIR).
+//
+// The SD card shares the radio's SPI bus, so it is mounted on the radio's own
+// SPIClass (getRadioSPI() in the variant's target.cpp). Mounting it on a
+// separate SPIClass would take over the shared pins and stop the radio.
+//
+// Logging uses MESH_DEBUG_PRINTLN, not Serial, because on USB companion builds
+// Serial carries the companion protocol.
+// ---------------------------------------------------------------------------
+#include <SD.h>
+
+#ifndef SD_BACKUP_DIR
+  #define SD_BACKUP_DIR "/meshcore"
+#endif
+
+static bool sdCardReady = false;
+
+// Copies a file byte-for-byte between two filesystem objects.
+// Works across LittleFS <-> SD because both use the Arduino File API.
+static bool copyFile(fs::FS& srcFS, const char* srcPath,
+                     fs::FS& dstFS, const char* dstPath) {
+  File src = srcFS.open(srcPath, "r");
+  if (!src) return false;
+  File dst = dstFS.open(dstPath, "w", true);
+  if (!dst) { src.close(); return false; }
+
+  uint8_t buf[128];
+  while (src.available()) {
+    int n = src.read(buf, sizeof(buf));
+    if (n > 0) dst.write(buf, n);
+  }
+  src.close();
+  dst.close();
+  return true;
+}
+
+// Mounts the SD card on the radio's SPI bus. Call after radio_init().
+static void mountSDCard() {
+  // Deselect both devices on the shared bus before SD init.
+  pinMode(SDCARD_CS, OUTPUT);
+  digitalWrite(SDCARD_CS, HIGH);
+  pinMode(P_LORA_NSS, OUTPUT);
+  digitalWrite(P_LORA_NSS, HIGH);
+
+  // SD cards need 74+ SPI clock cycles after power stabilisation before
+  // accepting CMD0.
+  delay(100);
+
+  // Some SD cards are slow to initialise: three attempts.
+  for (int attempt = 0; attempt < 3 && !sdCardReady; attempt++) {
+    if (attempt > 0) {
+      digitalWrite(SDCARD_CS, HIGH);   // Ensure CS released between retries
+      delay(250);
+      MESH_DEBUG_PRINTLN("SD card retry %d/3", attempt + 1);
+    }
+    sdCardReady = SD.begin(SDCARD_CS, getRadioSPI(), 4000000);
+  }
+  if (sdCardReady) {
+    MESH_DEBUG_PRINTLN("SD card mounted");
+  } else {
+    MESH_DEBUG_PRINTLN("SD card not available");
+  }
+}
+
+// Backup prefs, channels, identity and contacts from LittleFS to SD card.
+static void backupSettingsToSD() {
+  if (!sdCardReady) return;
+
+  if (!SD.exists("/meshcore")) SD.mkdir("/meshcore");
+  if (!SD.exists(SD_BACKUP_DIR)) SD.mkdir(SD_BACKUP_DIR);
+
+  if (LittleFS.exists("/prefs.json")) {
+    copyFile(LittleFS, "/prefs.json", SD, SD_BACKUP_DIR "/prefs.json");
+  }
+  if (LittleFS.exists("/channels2")) {
+    copyFile(LittleFS, "/channels2", SD, SD_BACKUP_DIR "/channels.bin");
+  }
+  if (LittleFS.exists("/identity/_main.id")) {
+    if (!SD.exists(SD_BACKUP_DIR "/identity")) SD.mkdir(SD_BACKUP_DIR "/identity");
+    copyFile(LittleFS, "/identity/_main.id", SD, SD_BACKUP_DIR "/identity/_main.id");
+  }
+  if (LittleFS.exists("/contacts3")) {
+    copyFile(LittleFS, "/contacts3", SD, SD_BACKUP_DIR "/contacts.bin");
+  }
+
+  digitalWrite(SDCARD_CS, HIGH);  // Release SD CS
+  MESH_DEBUG_PRINTLN("Settings backed up to SD");
+}
+
+// Restore prefs, channels, identity and contacts from SD card to LittleFS,
+// each only if LittleFS is missing it (e.g. after a fresh flash).
+// Returns true if anything was restored.
+static bool restoreSettingsFromSD() {
+  if (!sdCardReady) return false;
+
+  bool restored = false;
+
+  // DataStore::loadPrefs() reads /prefs.json, or converts the older
+  // /new_prefs, so only restore when neither is present.
+  if (!LittleFS.exists("/prefs.json") && !LittleFS.exists("/new_prefs")
+      && SD.exists(SD_BACKUP_DIR "/prefs.json")) {
+    if (copyFile(SD, SD_BACKUP_DIR "/prefs.json", LittleFS, "/prefs.json")) {
+      MESH_DEBUG_PRINTLN("Restored prefs from SD");
+      restored = true;
+    }
+  }
+
+  if (!LittleFS.exists("/channels2") && SD.exists(SD_BACKUP_DIR "/channels.bin")) {
+    if (copyFile(SD, SD_BACKUP_DIR "/channels.bin", LittleFS, "/channels2")) {
+      MESH_DEBUG_PRINTLN("Restored channels from SD");
+      restored = true;
+    }
+  }
+
+  // Identity - keeps the same device public key across reflashes
+  if (!LittleFS.exists("/identity/_main.id") && SD.exists(SD_BACKUP_DIR "/identity/_main.id")) {
+    LittleFS.mkdir("/identity");
+    if (copyFile(SD, SD_BACKUP_DIR "/identity/_main.id", LittleFS, "/identity/_main.id")) {
+      MESH_DEBUG_PRINTLN("Restored identity from SD");
+      restored = true;
+    }
+  }
+
+  if (!LittleFS.exists("/contacts3") && SD.exists(SD_BACKUP_DIR "/contacts.bin")) {
+    if (copyFile(SD, SD_BACKUP_DIR "/contacts.bin", LittleFS, "/contacts3")) {
+      MESH_DEBUG_PRINTLN("Restored contacts from SD");
+      restored = true;
+    }
+  }
+
+  digitalWrite(SDCARD_CS, HIGH);
+  return restored;
+}
+#endif
+
 /* GLOBAL OBJECTS */
 #ifdef DISPLAY_CLASS
   #include "UITask.h"
@@ -179,8 +317,15 @@ void setup() {
   the_mesh.begin();
 #elif defined(ESP32)
   LittleFS.begin(true);
+  #ifdef SD_SETTINGS_BACKUP
+  mountSDCard();
+  restoreSettingsFromSD();   // before store/mesh begin() load prefs, identity, contacts, channels
+  #endif
   store.begin();
   the_mesh.begin();
+  #ifdef SD_SETTINGS_BACKUP
+  backupSettingsToSD();      // after begin(), so a first-boot identity is included
+  #endif
 #else
   #error "need to define filesystem"
 #endif

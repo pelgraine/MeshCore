@@ -10,6 +10,10 @@ TBeam1W2Board board;
 
 static SPIClass spi;
 
+// The SD card shares the radio's SPI pins, so it must use this same SPIClass
+// (SD_SETTINGS_BACKUP in examples/companion_radio/main.cpp).
+SPIClass& getRadioSPI() { return spi; }
+
 RADIO_CLASS radio = new Module(P_LORA_NSS, P_LORA_DIO_1, P_LORA_RESET, P_LORA_BUSY, spi);
 
 WRAPPER_CLASS radio_driver(radio, board);
